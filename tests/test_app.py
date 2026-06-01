@@ -1,6 +1,8 @@
 import json
+import os
 import random
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -179,6 +181,50 @@ class ParseOutputs(unittest.TestCase):
             [{"name": "DP-1", "active": True}, {"name": "DP-2", "active": False}]
         )
         self.assertEqual(app.parse_outputs(raw), ["DP-1"])
+
+
+class ThrottleTests(unittest.TestCase):
+    def setUp(self):
+        self.cache_dir = Path(tempfile.mkdtemp())
+
+    def test_skips_when_changed_recently(self):
+        (self.cache_dir / "last_change").touch()  # a change just happened
+
+        router = met_router([101, 102], {101: True, 102: True})
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1"),
+                min_interval=1800,
+            )
+
+        self.assertEqual(shown, [])  # nothing chosen
+        self.assertEqual(runner.calls, [])  # and nothing set
+
+    def test_changes_when_interval_elapsed(self):
+        stamp = self.cache_dir / "last_change"
+        stamp.touch()
+        an_hour_ago = time.time() - 3600
+        os.utime(stamp, (an_hour_ago, an_hour_ago))
+
+        router = met_router([101, 102], {101: True, 102: True})
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                min_interval=1800,
+            )
+
+        self.assertEqual(len(shown), 1)
+        self.assertTrue((self.cache_dir / "current-DP-1.jpg").exists())
+        self.assertLess(time.time() - stamp.stat().st_mtime, 60)  # stamp refreshed
 
 
 class PaintingIdsTests(unittest.TestCase):

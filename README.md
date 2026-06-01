@@ -10,40 +10,29 @@ dependencies.
 Requires Python 3.10+, `swaymsg` (Sway), and ImageMagick 7 (`magick`, for the
 caption).
 
-## Install
-
-```bash
-./install.sh
-```
-
-This generates systemd **user** units (in `~/.config/systemd/user/`) that run
-artwall straight from this checkout, and enables a timer that changes the
-wallpaper every 30 minutes. Nothing is installed elsewhere, so keep this
-directory in place — to uninstall, disable the timer and delete the units.
-
-Because it runs as a user service, it needs `WAYLAND_DISPLAY` and `SWAYSOCK` in
-the systemd user environment. Add this to `~/.config/sway/config`:
-
-```
-exec systemctl --user import-environment WAYLAND_DISPLAY SWAYSOCK
-```
-
 ## Usage
 
-```bash
-systemctl --user start artwall.service      # change the wallpaper now
-systemctl --user list-timers artwall.timer  # see the next scheduled run
-journalctl --user -u artwall.service        # logs
-python3 -m artwall                          # run directly, outside systemd
-python3 -m artwall --preview                # open a captioned painting in your
-                                            # image viewer without changing anything
+Run it from this checkout — there's nothing to install. Add to your Sway config
+(`~/.config/sway/config`), pointing at where you cloned it, to set a wallpaper at
+startup and re-roll on window focus (throttled to once every 30 min):
+
+```
+exec /path/to/artwall/bin/artwall
+exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --min-interval 1800; done
 ```
 
-Change the cadence by editing `OnUnitActiveSec` in
-`~/.config/systemd/user/artwall.timer`, then `systemctl --user daemon-reload`.
+`--min-interval` makes a frequent trigger a no-op until that many seconds have
+passed, so the wallpaper rotates while you're active and pauses while you're
+away. Running as a child of Sway, it inherits `SWAYSOCK` automatically.
 
-State lives under `~/.cache/artwall/` (cached IDs, metadata, and the current
-image per display). Deleting it is a safe full reset.
+To drive it by hand:
+
+```bash
+python3 -m artwall            # set the wallpaper once
+python3 -m artwall --preview  # open a captioned painting without changing the wallpaper
+```
+
+State lives under `~/.cache/artwall/`; deleting it is a safe full reset.
 
 ## Development
 

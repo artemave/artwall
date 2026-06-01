@@ -7,9 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A standard-library-only Python tool that sets a random painting from the
 [Met Museum open collection API](https://metmuseum.github.io/) as the **Sway**
 desktop wallpaper, with a caption (artist/title/date) burned into the corner via
-ImageMagick. Designed to run on a systemd user timer. No third-party Python
-dependencies — keep it that way (use `urllib`, not `requests`); external CLI
-tools (`swaymsg`, `magick`) are fine since we already shell out.
+ImageMagick. It's a **oneshot** — sets the wallpaper once and exits. Rotation is
+driven by Sway events, not a daemon: the Sway config subscribes to window-focus
+events and runs artwall on each, with `--min-interval` throttling it to ~every 30
+min. Launched as a child of Sway, it inherits `SWAYSOCK` — no systemd, no env
+import. No third-party Python dependencies — keep it that way (use `urllib`, not
+`requests`); external CLI tools (`swaymsg`, `magick`) are fine since we already
+shell out.
 
 ## Commands
 
@@ -20,8 +24,8 @@ python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper  # on
 make install-dev                        # dev tooling: ruff, mypy, coverage
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
-python3 -m artwall                       # run the app from a checkout (hits network + swaymsg + magick)
-./install.sh                             # write systemd user units pointing at this checkout + enable the timer
+python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
+python3 -m artwall --min-interval 1800   # set once, but no-op if changed <1800s ago (event-driven throttle)
 ```
 
 ## Architecture
@@ -38,15 +42,17 @@ it can be tested without network or `swaymsg`.
   caption formatting). Prefer adding new logic here so it stays unit-testable.
 - `artwall/commands.py` — pure argv builders for `magick` (caption) and
   `swaymsg`.
-- `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs)`
-  injects `rng`, `runner`, and `get_outputs` (defaulting to `random`,
-  `subprocess.run`, and `sway_outputs`) so the full flow can be driven
+- `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
+  min_interval)` injects `rng`, `runner`, and `get_outputs` (defaulting to
+  `random`, `subprocess.run`, and `sway_outputs`) so the full flow can be driven
   deterministically.
 
-Flow in `run()`: fetch/cache painting IDs → query the active outputs
-(`get_outputs`, default `sway_outputs()` → `swaymsg -t get_outputs`) → for each
-display, pick a random ID with an image (retry up to `ATTEMPTS`), download,
-`magick`-caption to `current-<output>.jpg`, and `swaymsg output <name> bg`.
+Flow in `run()`: if `min_interval` > 0 and `config.stamp` was touched more
+recently than that, return early (the event-driven throttle). Otherwise:
+fetch/cache painting IDs → query the active outputs (`get_outputs`, default
+`sway_outputs()` → `swaymsg -t get_outputs`) → for each display, pick a random ID
+with an image (retry up to `ATTEMPTS`), download, `magick`-caption to
+`current-<output>.jpg`, `swaymsg output <name> bg` → touch `config.stamp`.
 Selection is plain random — no persisted history — but ids already chosen this
 run are excluded so each display gets a *different* painting. The
 pick/download/caption step is `_render()`, also used by `preview()` (the
@@ -72,11 +78,17 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 ## Deployment notes
 
-`systemd/artwall.service` is a **template** (`__REPO__`/`__PYTHON__`
-placeholders); `install.sh` substitutes the checkout path and the concrete
-interpreter (`sys.executable`, not a PATH/mise shim) and writes the result to
-`~/.config/systemd/user/`. The service runs `python3 -m artwall` with
-`PYTHONPATH` set to the repo — nothing is pip-installed, so the checkout must
-stay put. It's a user oneshot run by `artwall.timer`, so it needs
-`WAYLAND_DISPLAY`/`SWAYSOCK` imported into the systemd user environment from
-Sway (`exec systemctl --user import-environment ...`).
+No installer and no systemd. The user adds two lines to their Sway config: one
+`exec` to set a wallpaper at startup, and one that subscribes to window events
+and runs artwall per event with `--min-interval 1800` (see README). `bin/artwall`
+is a small shell launcher that sets `PYTHONPATH` to the repo and execs `python3
+-m artwall "$@"` — nothing more. A failed run prints to Sway's stderr and is
+skipped; it doesn't touch the stamp, so the next event retries. Because the
+process is a child of Sway it inherits `SWAYSOCK`, so `swaymsg` works with no
+environment import (`swaymsg` talks to the IPC socket, it does not need
+`WAYLAND_DISPLAY`). Nothing is pip-installed, so the checkout must stay put — the
+`exec` line points at it.
+
+There is no long-running process of ours — rotation is event-driven and
+self-throttled via `config.stamp`'s mtime, so the only persistent process is the
+stock `swaymsg -t subscribe` pipe in the Sway config.

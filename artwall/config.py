@@ -33,3 +33,8 @@ class Config:
 
     def output_image(self, name: str) -> Path:
         return self.cache_dir / f"current-{name}.jpg"
+
+    @property
+    def stamp(self) -> Path:
+        """Marker file whose mtime records the last wallpaper change."""
+        return self.cache_dir / "last_change"

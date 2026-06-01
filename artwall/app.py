@@ -97,15 +97,22 @@ def run(
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
     get_outputs: Callable[[], list[str]] = sway_outputs,
+    min_interval: float = 0.0,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
 
-    `rng`, `runner` and `get_outputs` are injected so tests can drive run()
-    deterministically — no mocks, no real Sway.
+    With `min_interval` > 0, do nothing if the last change was more recent than
+    that — so this can be triggered from frequent Sway events (e.g. window
+    focus) without thrashing the wallpaper. `rng`, `runner` and `get_outputs`
+    are injected so tests can drive run() deterministically — no mocks, no real
+    Sway.
     """
     config = config or Config()
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if min_interval and cache.fresh(config.stamp, min_interval):
+        return []
 
     ids = painting_ids(config)
 
@@ -115,6 +122,7 @@ def run(
         shown.append(_render(config, rng, runner, ids, shown, image_path))
         runner(commands.wallpaper_command(output, image_path), check=True)
 
+    config.stamp.touch()
     return shown
 
 
