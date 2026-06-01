@@ -1,0 +1,5 @@
+# Development-only tooling. The app itself has no runtime dependencies.
+# Install with: pip install -r requirements-dev.txt
+coverage>=7
+mypy>=1.8
+ruff>=0.4

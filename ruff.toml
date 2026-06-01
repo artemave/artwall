@@ -1,0 +1,6 @@
+target-version = "py310"
+line-length = 100
+
+[lint]
+# pycodestyle, pyflakes, isort, warnings, pyupgrade, bugbear.
+select = ["E", "F", "I", "W", "UP", "B"]

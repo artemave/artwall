@@ -1,0 +1,10 @@
+[run]
+branch = True
+source = artwall
+# The entry-point shim just calls run() with real defaults — exercising it means
+# hitting the live API, swaymsg and magick, so it's excluded rather than mocked.
+omit = artwall/__main__.py
+
+[report]
+show_missing = True
+fail_under = 100
