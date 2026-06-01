@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from artwall import app, cache
+from artwall import app
 from artwall.config import Config
 from tests.server import serve
 
@@ -65,7 +65,7 @@ class RunTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir = Path(tempfile.mkdtemp())
 
-    def test_happy_path_sets_wallpaper_and_records_history(self):
+    def test_happy_path_sets_wallpaper(self):
         router = met_router([101, 102], {101: True, 102: True})
         with serve(router) as s:
             router.base = s.base_url
@@ -95,9 +95,6 @@ class RunTests(unittest.TestCase):
             (["swaymsg", "output", "DP-1", "bg", str(image), "fill"], True),
         )
 
-        history = cache.load_json(self.cache_dir / "history.json", [])
-        self.assertEqual(history, [object_id])
-
     def test_each_display_gets_a_different_painting(self):
         router = met_router([101, 102], {101: True, 102: True})
         with serve(router) as s:
@@ -116,21 +113,6 @@ class RunTests(unittest.TestCase):
         self.assertEqual([argv[2] for argv in wallpaper_calls], ["DP-1", "HDMI-A-1"])
         for name in ("DP-1", "HDMI-A-1"):
             self.assertTrue((self.cache_dir / f"current-{name}.jpg").exists())
-
-        history = cache.load_json(self.cache_dir / "history.json", [])
-        self.assertEqual(sorted(history), [101, 102])
-
-    def test_second_run_avoids_repeating_recent_artwork(self):
-        router = met_router([101, 102], {101: True, 102: True})
-        with serve(router) as s:
-            router.base = s.base_url
-            cfg = config_for(s, self.cache_dir)
-            first = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
-            second = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
-
-        self.assertNotEqual(first, second)
-        history = cache.load_json(self.cache_dir / "history.json", [])
-        self.assertEqual(sorted(history), [101, 102])
 
     def test_ids_are_cached_after_first_fetch(self):
         router = met_router([101], {101: True})
@@ -162,7 +144,7 @@ class PreviewTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir = Path(tempfile.mkdtemp())
 
-    def test_opens_preview_without_touching_wallpaper_or_history(self):
+    def test_opens_preview_without_touching_the_wallpaper(self):
         router = met_router([101, 102], {101: True, 102: True})
         with serve(router) as s:
             router.base = s.base_url
@@ -180,10 +162,9 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(annotate_call[0][0], "magick")
         self.assertEqual(open_call, (["xdg-open", str(path)], True))
 
-        # The wallpaper and rotation are untouched.
+        # The wallpaper is untouched: no swaymsg, no per-output image written.
         self.assertFalse(any(call[0][0] == "swaymsg" for call in runner.calls))
-        self.assertFalse((self.cache_dir / "current.jpg").exists())
-        self.assertFalse((self.cache_dir / "history.json").exists())
+        self.assertFalse(any(self.cache_dir.glob("current-*.jpg")))
 
 
 class ParseOutputs(unittest.TestCase):

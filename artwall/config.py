@@ -7,7 +7,6 @@ DEFAULT_CACHE = Path.home() / ".cache" / "artwall"
 SEARCH_URL = "https://collectionapi.metmuseum.org/public/collection/v1/search"
 OBJECT_URL = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
 IDS_TTL = 7 * 24 * 60 * 60
-HISTORY_LIMIT = 500
 
 
 @dataclass
@@ -23,15 +22,10 @@ class Config:
     search_url: str = SEARCH_URL
     object_url: str = OBJECT_URL
     ids_ttl: int = IDS_TTL
-    history_limit: int = HISTORY_LIMIT
 
     @property
     def ids_file(self) -> Path:
         return self.cache_dir / "met_painting_ids.json"
-
-    @property
-    def history_file(self) -> Path:
-        return self.cache_dir / "history.json"
 
     @property
     def preview_image(self) -> Path:

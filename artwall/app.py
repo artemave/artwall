@@ -43,23 +43,23 @@ def metadata(config: Config, object_id: int) -> dict[str, Any]:
 def choose(
     config: Config,
     ids: list[int],
-    history: list[int],
     rng: random.Random,
+    exclude: list[int],
     attempts: int = ATTEMPTS,
-) -> tuple[int, dict[str, Any], str, list[int]]:
-    """Pick a random unseen artwork that actually has an image.
+) -> tuple[int, dict[str, Any], str]:
+    """Pick a random artwork that has an image, avoiding ids in `exclude`.
 
-    Returns (object_id, metadata, image_url, history) where history reflects a
-    reset if every ID had already been shown.
+    `exclude` holds the ids already used this run, so several displays each get
+    a different painting.
     """
-    available, history = selection.available_ids(ids, history)
+    candidates = [i for i in ids if i not in exclude]
 
     for _ in range(attempts):
-        object_id = rng.choice(available)
+        object_id = rng.choice(candidates)
         data = metadata(config, object_id)
         image_url = selection.pick_image_url(data)
         if image_url:
-            return object_id, data, image_url, history
+            return object_id, data, image_url
 
     raise RuntimeError("Could not find artwork with an image")
 
@@ -82,19 +82,14 @@ def _render(
     rng: random.Random,
     runner: Callable[..., object],
     ids: list[int],
-    history: list[int],
+    exclude: list[int],
     image_path: Path,
-) -> tuple[int, list[int]]:
-    """Pick an unseen painting, download it, and caption it at image_path.
-
-    Returns (object_id, history) with the chosen id appended, so rendering
-    several displays in a row picks a different painting for each.
-    """
-    object_id, data, image_url, history = choose(config, ids, history, rng)
+) -> int:
+    """Pick a painting (avoiding `exclude`), download it, and caption it."""
+    object_id, data, image_url = choose(config, ids, rng, exclude)
     met.download(image_url, image_path)
     runner(commands.annotate_command(image_path, selection.caption(data)), check=True)
-    history = selection.trim_history(history, object_id, config.history_limit)
-    return object_id, history
+    return object_id
 
 
 def run(
@@ -103,7 +98,7 @@ def run(
     runner: Callable[..., object] = subprocess.run,
     get_outputs: Callable[[], list[str]] = sway_outputs,
 ) -> list[int]:
-    """Set a different captioned painting on each connected display.
+    """Set a different random captioned painting on each connected display.
 
     `rng`, `runner` and `get_outputs` are injected so tests can drive run()
     deterministically — no mocks, no real Sway.
@@ -113,16 +108,13 @@ def run(
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     ids = painting_ids(config)
-    history: list[int] = cache.load_json(config.history_file, [])
 
     shown: list[int] = []
     for output in get_outputs():
         image_path = config.output_image(output)
-        object_id, history = _render(config, rng, runner, ids, history, image_path)
+        shown.append(_render(config, rng, runner, ids, shown, image_path))
         runner(commands.wallpaper_command(output, image_path), check=True)
-        shown.append(object_id)
 
-    cache.save_json(config.history_file, history)
     return shown
 
 
@@ -131,18 +123,17 @@ def preview(
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
 ) -> Path:
-    """Generate one captioned painting and open it, changing nothing else.
+    """Generate one random captioned painting and open it, changing nothing else.
 
-    The wallpaper and the rotation history are left untouched — this just
-    writes a preview image and hands it to the system image viewer.
+    The wallpaper is left untouched — this just writes a preview image and hands
+    it to the system image viewer.
     """
     config = config or Config()
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     ids = painting_ids(config)
-    history: list[int] = cache.load_json(config.history_file, [])
-    _render(config, rng, runner, ids, history, config.preview_image)
+    _render(config, rng, runner, ids, [], config.preview_image)
     runner(commands.open_command(config.preview_image), check=True)
 
     return config.preview_image

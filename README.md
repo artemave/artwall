@@ -2,10 +2,10 @@
 
 Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 the [Metropolitan Museum of Art's open collection](https://metmuseum.github.io/).
-Each run picks artworks that haven't been shown recently, downloads them, burns
-a small caption (artist, title, date) into the bottom-right corner, and sets a
-**different** painting on each connected display. Pure Python standard library —
-no third-party dependencies.
+Each run picks random paintings, downloads them, burns a small caption (artist,
+title, date) into the bottom-right corner, and sets a **different** painting on
+each connected display. Pure Python standard library — no third-party
+dependencies.
 
 Requires Python 3.10+, `swaymsg` (Sway), and ImageMagick 7 (`magick`, for the
 caption).
@@ -42,8 +42,8 @@ python3 -m artwall --preview                # open a captioned painting in your
 Change the cadence by editing `OnUnitActiveSec` in
 `~/.config/systemd/user/artwall.timer`, then `systemctl --user daemon-reload`.
 
-State lives under `~/.cache/artwall/` (cached IDs, metadata, history, and the
-current image per display). Deleting it is a safe full reset.
+State lives under `~/.cache/artwall/` (cached IDs, metadata, and the current
+image per display). Deleting it is a safe full reset.
 
 ## Development
 
@@ -58,7 +58,7 @@ Tests use the standard-library `unittest` runner — no mocks:
 ```bash
 python3 -m unittest discover -s tests        # everything
 python3 -m unittest tests.test_selection     # one module
-python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper_and_records_history
+python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper
 ```
 
 Install the dev tooling, then run every check (lint, typecheck, coverage gate)

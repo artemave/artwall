@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> None:
         "--preview",
         action="store_true",
         help="Generate a captioned painting and open it with xdg-open, "
-        "without changing the wallpaper or rotation history.",
+        "without changing the wallpaper.",
     )
     args = parser.parse_args(argv)
 

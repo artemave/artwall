@@ -16,7 +16,7 @@ tools (`swaymsg`, `magick`) are fine since we already shell out.
 ```bash
 python3 -m unittest discover -s tests   # run all tests
 python3 -m unittest tests.test_app      # run one module
-python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper_and_records_history  # one test
+python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper  # one test
 make install-dev                        # dev tooling: ruff, mypy, coverage
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
@@ -34,9 +34,8 @@ it can be tested without network or `swaymsg`.
   dir and a local HTTP server. Don't hardcode paths/URLs elsewhere.
 - `artwall/cache.py` — JSON load/save + `fresh()` (mtime-based TTL).
 - `artwall/met.py` — low-level HTTP (`get_json`, `download`) over `urllib`.
-- `artwall/selection.py` — **pure** decision logic (unseen-ID picking with
-  reset-on-exhaustion, image-URL precedence, history trim). Prefer adding new
-  logic here so it stays unit-testable.
+- `artwall/selection.py` — **pure** decision logic (image-URL precedence,
+  caption formatting). Prefer adding new logic here so it stays unit-testable.
 - `artwall/commands.py` — pure argv builders for `magick` (caption) and
   `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs)`
@@ -46,12 +45,13 @@ it can be tested without network or `swaymsg`.
 
 Flow in `run()`: fetch/cache painting IDs → query the active outputs
 (`get_outputs`, default `sway_outputs()` → `swaymsg -t get_outputs`) → for each
-display, pick an unseen ID with an image (retry up to `ATTEMPTS`), download,
+display, pick a random ID with an image (retry up to `ATTEMPTS`), download,
 `magick`-caption to `current-<output>.jpg`, and `swaymsg output <name> bg`.
-History is threaded across displays so each gets a *different* painting, then
-persisted once. The pick/download/caption step is `_render()`, also used by
-`preview()` (the `--preview` flag), which writes `preview.jpg`, opens it with
-`xdg-open`, and leaves the wallpaper and history untouched.
+Selection is plain random — no persisted history — but ids already chosen this
+run are excluded so each display gets a *different* painting. The
+pick/download/caption step is `_render()`, also used by `preview()` (the
+`--preview` flag), which writes `preview.jpg`, opens it with `xdg-open`, and
+leaves the wallpaper untouched.
 
 `sway_outputs()` is the one function excluded from coverage (`# pragma: no
 cover`) — it needs a live Sway compositor; its JSON parsing is split into the
