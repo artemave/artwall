@@ -35,6 +35,8 @@ systemctl --user start artwall.service      # change the wallpaper now
 systemctl --user list-timers artwall.timer  # see the next scheduled run
 journalctl --user -u artwall.service        # logs
 python3 -m artwall                          # run directly, outside systemd
+python3 -m artwall --preview                # open a captioned painting in your
+                                            # image viewer without changing anything
 ```
 
 Change the cadence by editing `OnUnitActiveSec` in

@@ -127,6 +127,34 @@ class RunTests(unittest.TestCase):
                 )
 
 
+class PreviewTests(unittest.TestCase):
+    def setUp(self):
+        self.cache_dir = Path(tempfile.mkdtemp())
+
+    def test_opens_preview_without_touching_wallpaper_or_history(self):
+        router = met_router([101, 102], {101: True, 102: True})
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            path = app.preview(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+            )
+
+        self.assertEqual(path, self.cache_dir / "preview.jpg")
+        self.assertEqual(path.read_bytes(), IMAGE_BYTES)
+
+        annotate_call, open_call = runner.calls
+        self.assertEqual(annotate_call[0][0], "magick")
+        self.assertEqual(open_call, (["xdg-open", str(path)], True))
+
+        # The wallpaper and rotation are untouched.
+        self.assertFalse(any(call[0][0] == "swaymsg" for call in runner.calls))
+        self.assertFalse((self.cache_dir / "current.jpg").exists())
+        self.assertFalse((self.cache_dir / "history.json").exists())
+
+
 class PaintingIdsTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir = Path(tempfile.mkdtemp())

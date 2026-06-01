@@ -19,6 +19,12 @@ class Commands(unittest.TestCase):
             ["swaymsg", "output", "*", "bg", "/tmp/current.jpg", "fill"],
         )
 
+    def test_open_command(self):
+        self.assertEqual(
+            commands.open_command(Path("/tmp/preview.jpg")),
+            ["xdg-open", "/tmp/preview.jpg"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

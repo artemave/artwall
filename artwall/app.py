@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import subprocess
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from . import cache, commands, met, selection
@@ -62,6 +63,29 @@ def choose(
     raise RuntimeError("Could not find artwork with an image")
 
 
+def _generate(
+    config: Config,
+    rng: random.Random,
+    runner: Callable[..., object],
+    image_path: Path,
+) -> tuple[int, list[int]]:
+    """Pick an unseen painting, download it, and caption it at image_path.
+
+    Returns (object_id, history); history is read to avoid repeats but not
+    persisted here — the caller decides whether this counts as "shown".
+    """
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    ids = painting_ids(config)
+    history: list[int] = cache.load_json(config.history_file, [])
+
+    object_id, data, image_url, history = choose(config, ids, history, rng)
+    met.download(image_url, image_path)
+    runner(commands.annotate_command(image_path, selection.caption(data)), check=True)
+
+    return object_id, history
+
+
 def run(
     config: Config | None = None,
     rng: random.Random | None = None,
@@ -74,18 +98,31 @@ def run(
     """
     config = config or Config()
     rng = rng or random.Random()
-    config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    ids = painting_ids(config)
-    history: list[int] = cache.load_json(config.history_file, [])
+    object_id, history = _generate(config, rng, runner, config.current_image)
 
-    object_id, data, image_url, history = choose(config, ids, history, rng)
-    met.download(image_url, config.current_image)
-
-    runner(commands.annotate_command(config.current_image, selection.caption(data)), check=True)
     runner(commands.wallpaper_command(config.current_image), check=True)
 
     history = selection.trim_history(history, object_id, config.history_limit)
     cache.save_json(config.history_file, history)
 
     return object_id
+
+
+def preview(
+    config: Config | None = None,
+    rng: random.Random | None = None,
+    runner: Callable[..., object] = subprocess.run,
+) -> Path:
+    """Generate a captioned painting and open it, without changing anything.
+
+    The wallpaper and the rotation history are left untouched — this just
+    writes a preview image and hands it to the system image viewer.
+    """
+    config = config or Config()
+    rng = rng or random.Random()
+
+    _generate(config, rng, runner, config.preview_image)
+    runner(commands.open_command(config.preview_image), check=True)
+
+    return config.preview_image

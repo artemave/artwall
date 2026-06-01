@@ -29,3 +29,7 @@ def annotate_command(image_path: Path, text: str) -> list[str]:
 
 def wallpaper_command(image_path: Path) -> list[str]:
     return ["swaymsg", "output", "*", "bg", str(image_path), "fill"]
+
+
+def open_command(image_path: Path) -> list[str]:
+    return ["xdg-open", str(image_path)]

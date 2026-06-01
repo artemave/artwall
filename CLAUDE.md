@@ -45,8 +45,11 @@ it can be tested without network or `swaymsg`.
 
 Flow in `run()`: fetch/cache painting IDs → pick an unseen ID with an image
 (retry up to `ATTEMPTS`) → download → `magick` burn caption in place → `swaymsg`
-set bg → append to history. All state is cached under `~/.cache/artwall/`;
-deleting it is a safe reset.
+set bg → append to history. The download-and-caption step is factored into
+`_generate()`, shared with `preview()` (the `--preview` flag): preview writes to
+`preview.jpg` and opens it with `xdg-open`, leaving the wallpaper and history
+untouched. All state is cached under `~/.cache/artwall/`; deleting it is a safe
+reset.
 
 ## Testing conventions
 

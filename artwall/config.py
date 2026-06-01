@@ -36,3 +36,7 @@ class Config:
     @property
     def current_image(self) -> Path:
         return self.cache_dir / "current.jpg"
+
+    @property
+    def preview_image(self) -> Path:
+        return self.cache_dir / "preview.jpg"
