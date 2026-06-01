@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 import subprocess
 from collections.abc import Callable
@@ -63,26 +64,36 @@ def choose(
     raise RuntimeError("Could not find artwork with an image")
 
 
-def _generate(
+def parse_outputs(raw: str) -> list[str]:
+    """Names of the active outputs in `swaymsg -t get_outputs -r` JSON."""
+    names: list[str] = [o["name"] for o in json.loads(raw) if o["active"]]
+    return names
+
+
+def sway_outputs() -> list[str]:  # pragma: no cover - needs a live Sway compositor
+    result = subprocess.run(
+        commands.outputs_command(), capture_output=True, text=True, check=True
+    )
+    return parse_outputs(result.stdout)
+
+
+def _render(
     config: Config,
     rng: random.Random,
     runner: Callable[..., object],
+    ids: list[int],
+    history: list[int],
     image_path: Path,
 ) -> tuple[int, list[int]]:
     """Pick an unseen painting, download it, and caption it at image_path.
 
-    Returns (object_id, history); history is read to avoid repeats but not
-    persisted here — the caller decides whether this counts as "shown".
+    Returns (object_id, history) with the chosen id appended, so rendering
+    several displays in a row picks a different painting for each.
     """
-    config.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    ids = painting_ids(config)
-    history: list[int] = cache.load_json(config.history_file, [])
-
     object_id, data, image_url, history = choose(config, ids, history, rng)
     met.download(image_url, image_path)
     runner(commands.annotate_command(image_path, selection.caption(data)), check=True)
-
+    history = selection.trim_history(history, object_id, config.history_limit)
     return object_id, history
 
 
@@ -90,23 +101,29 @@ def run(
     config: Config | None = None,
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
-) -> int:
-    """Fetch a painting, set it as the wallpaper, record it in history.
+    get_outputs: Callable[[], list[str]] = sway_outputs,
+) -> list[int]:
+    """Set a different captioned painting on each connected display.
 
-    `rng` and `runner` are injected so tests can drive run() deterministically
-    with a real Random seed and a recording runner — no mocks, no real swaymsg.
+    `rng`, `runner` and `get_outputs` are injected so tests can drive run()
+    deterministically — no mocks, no real Sway.
     """
     config = config or Config()
     rng = rng or random.Random()
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    object_id, history = _generate(config, rng, runner, config.current_image)
+    ids = painting_ids(config)
+    history: list[int] = cache.load_json(config.history_file, [])
 
-    runner(commands.wallpaper_command(config.current_image), check=True)
+    shown: list[int] = []
+    for output in get_outputs():
+        image_path = config.output_image(output)
+        object_id, history = _render(config, rng, runner, ids, history, image_path)
+        runner(commands.wallpaper_command(output, image_path), check=True)
+        shown.append(object_id)
 
-    history = selection.trim_history(history, object_id, config.history_limit)
     cache.save_json(config.history_file, history)
-
-    return object_id
+    return shown
 
 
 def preview(
@@ -114,15 +131,18 @@ def preview(
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
 ) -> Path:
-    """Generate a captioned painting and open it, without changing anything.
+    """Generate one captioned painting and open it, changing nothing else.
 
     The wallpaper and the rotation history are left untouched — this just
     writes a preview image and hands it to the system image viewer.
     """
     config = config or Config()
     rng = rng or random.Random()
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    _generate(config, rng, runner, config.preview_image)
+    ids = painting_ids(config)
+    history: list[int] = cache.load_json(config.history_file, [])
+    _render(config, rng, runner, ids, history, config.preview_image)
     runner(commands.open_command(config.preview_image), check=True)
 
     return config.preview_image

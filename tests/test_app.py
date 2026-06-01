@@ -56,6 +56,11 @@ def config_for(server, cache_dir):
     )
 
 
+def outputs(*names):
+    """A real get_outputs provider returning fixed display names."""
+    return lambda: list(names)
+
+
 class RunTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir = Path(tempfile.mkdtemp())
@@ -65,15 +70,18 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
-            object_id = app.run(
+            shown = app.run(
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
+                get_outputs=outputs("DP-1"),
             )
 
+        self.assertEqual(len(shown), 1)
+        object_id = shown[0]
         self.assertIn(object_id, [101, 102])
 
-        image = self.cache_dir / "current.jpg"
+        image = self.cache_dir / "current-DP-1.jpg"
         self.assertEqual(image.read_bytes(), IMAGE_BYTES)
 
         annotate_call, wallpaper_call = runner.calls
@@ -84,19 +92,41 @@ class RunTests(unittest.TestCase):
         self.assertEqual(annotate_call[1], True)  # check=True: a failed caption fails the run
         self.assertEqual(
             wallpaper_call,
-            (["swaymsg", "output", "*", "bg", str(image), "fill"], True),
+            (["swaymsg", "output", "DP-1", "bg", str(image), "fill"], True),
         )
 
         history = cache.load_json(self.cache_dir / "history.json", [])
         self.assertEqual(history, [object_id])
+
+    def test_each_display_gets_a_different_painting(self):
+        router = met_router([101, 102], {101: True, 102: True})
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1", "HDMI-A-1"),
+            )
+
+        self.assertEqual(sorted(shown), [101, 102])  # two distinct paintings
+
+        wallpaper_calls = [argv for argv, _check in runner.calls if argv[0] == "swaymsg"]
+        self.assertEqual([argv[2] for argv in wallpaper_calls], ["DP-1", "HDMI-A-1"])
+        for name in ("DP-1", "HDMI-A-1"):
+            self.assertTrue((self.cache_dir / f"current-{name}.jpg").exists())
+
+        history = cache.load_json(self.cache_dir / "history.json", [])
+        self.assertEqual(sorted(history), [101, 102])
 
     def test_second_run_avoids_repeating_recent_artwork(self):
         router = met_router([101, 102], {101: True, 102: True})
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
-            first = app.run(config=cfg, rng=random.Random(0), runner=Recorder())
-            second = app.run(config=cfg, rng=random.Random(0), runner=Recorder())
+            first = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
+            second = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
 
         self.assertNotEqual(first, second)
         history = cache.load_json(self.cache_dir / "history.json", [])
@@ -107,9 +137,9 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
-            app.run(config=cfg, rng=random.Random(0), runner=Recorder())
+            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
             search_hits = sum(1 for p in s.requests if p.startswith("/search"))
-            app.run(config=cfg, rng=random.Random(0), runner=Recorder())
+            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
             search_hits_after = sum(1 for p in s.requests if p.startswith("/search"))
 
         self.assertEqual(search_hits, 1)
@@ -124,6 +154,7 @@ class RunTests(unittest.TestCase):
                     config=config_for(s, self.cache_dir),
                     rng=random.Random(0),
                     runner=Recorder(),
+                    get_outputs=outputs("DP-1"),
                 )
 
 
@@ -153,6 +184,20 @@ class PreviewTests(unittest.TestCase):
         self.assertFalse(any(call[0][0] == "swaymsg" for call in runner.calls))
         self.assertFalse((self.cache_dir / "current.jpg").exists())
         self.assertFalse((self.cache_dir / "history.json").exists())
+
+
+class ParseOutputs(unittest.TestCase):
+    def test_returns_active_output_names(self):
+        raw = json.dumps(
+            [{"name": "DP-1", "active": True}, {"name": "HDMI-A-1", "active": True}]
+        )
+        self.assertEqual(app.parse_outputs(raw), ["DP-1", "HDMI-A-1"])
+
+    def test_skips_inactive_outputs(self):
+        raw = json.dumps(
+            [{"name": "DP-1", "active": True}, {"name": "DP-2", "active": False}]
+        )
+        self.assertEqual(app.parse_outputs(raw), ["DP-1"])
 
 
 class PaintingIdsTests(unittest.TestCase):

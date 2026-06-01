@@ -34,9 +34,8 @@ class Config:
         return self.cache_dir / "history.json"
 
     @property
-    def current_image(self) -> Path:
-        return self.cache_dir / "current.jpg"
-
-    @property
     def preview_image(self) -> Path:
         return self.cache_dir / "preview.jpg"
+
+    def output_image(self, name: str) -> Path:
+        return self.cache_dir / f"current-{name}.jpg"

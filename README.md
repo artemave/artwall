@@ -2,10 +2,10 @@
 
 Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 the [Metropolitan Museum of Art's open collection](https://metmuseum.github.io/).
-Each run picks an artwork that hasn't been shown recently, downloads it, burns a
-small caption (artist, title, date) into the bottom-right corner, and sets it as
-the background on every output. Pure Python standard library — no third-party
-dependencies.
+Each run picks artworks that haven't been shown recently, downloads them, burns
+a small caption (artist, title, date) into the bottom-right corner, and sets a
+**different** painting on each connected display. Pure Python standard library —
+no third-party dependencies.
 
 Requires Python 3.10+, `swaymsg` (Sway), and ImageMagick 7 (`magick`, for the
 caption).
@@ -43,7 +43,7 @@ Change the cadence by editing `OnUnitActiveSec` in
 `~/.config/systemd/user/artwall.timer`, then `systemctl --user daemon-reload`.
 
 State lives under `~/.cache/artwall/` (cached IDs, metadata, history, and the
-current image). Deleting it is a safe full reset.
+current image per display). Deleting it is a safe full reset.
 
 ## Development
 

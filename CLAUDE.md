@@ -39,17 +39,24 @@ it can be tested without network or `swaymsg`.
   logic here so it stays unit-testable.
 - `artwall/commands.py` — pure argv builders for `magick` (caption) and
   `swaymsg`.
-- `artwall/app.py` — orchestration. `run(config, rng, runner)` injects `rng`
-  and `runner` (defaulting to `random` and `subprocess.run`) so the full flow
-  can be driven deterministically.
+- `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs)`
+  injects `rng`, `runner`, and `get_outputs` (defaulting to `random`,
+  `subprocess.run`, and `sway_outputs`) so the full flow can be driven
+  deterministically.
 
-Flow in `run()`: fetch/cache painting IDs → pick an unseen ID with an image
-(retry up to `ATTEMPTS`) → download → `magick` burn caption in place → `swaymsg`
-set bg → append to history. The download-and-caption step is factored into
-`_generate()`, shared with `preview()` (the `--preview` flag): preview writes to
-`preview.jpg` and opens it with `xdg-open`, leaving the wallpaper and history
-untouched. All state is cached under `~/.cache/artwall/`; deleting it is a safe
-reset.
+Flow in `run()`: fetch/cache painting IDs → query the active outputs
+(`get_outputs`, default `sway_outputs()` → `swaymsg -t get_outputs`) → for each
+display, pick an unseen ID with an image (retry up to `ATTEMPTS`), download,
+`magick`-caption to `current-<output>.jpg`, and `swaymsg output <name> bg`.
+History is threaded across displays so each gets a *different* painting, then
+persisted once. The pick/download/caption step is `_render()`, also used by
+`preview()` (the `--preview` flag), which writes `preview.jpg`, opens it with
+`xdg-open`, and leaves the wallpaper and history untouched.
+
+`sway_outputs()` is the one function excluded from coverage (`# pragma: no
+cover`) — it needs a live Sway compositor; its JSON parsing is split into the
+pure, tested `parse_outputs()`. All state is cached under `~/.cache/artwall/`;
+deleting it is a safe reset.
 
 ## Testing conventions
 

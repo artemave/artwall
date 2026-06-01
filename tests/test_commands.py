@@ -15,8 +15,14 @@ class Commands(unittest.TestCase):
 
     def test_wallpaper_command(self):
         self.assertEqual(
-            commands.wallpaper_command(Path("/tmp/current.jpg")),
-            ["swaymsg", "output", "*", "bg", "/tmp/current.jpg", "fill"],
+            commands.wallpaper_command("DP-1", Path("/tmp/current-DP-1.jpg")),
+            ["swaymsg", "output", "DP-1", "bg", "/tmp/current-DP-1.jpg", "fill"],
+        )
+
+    def test_outputs_command(self):
+        self.assertEqual(
+            commands.outputs_command(),
+            ["swaymsg", "-t", "get_outputs", "-r"],
         )
 
     def test_open_command(self):

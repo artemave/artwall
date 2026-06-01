@@ -27,8 +27,12 @@ def annotate_command(image_path: Path, text: str) -> list[str]:
     ]
 
 
-def wallpaper_command(image_path: Path) -> list[str]:
-    return ["swaymsg", "output", "*", "bg", str(image_path), "fill"]
+def wallpaper_command(output: str, image_path: Path) -> list[str]:
+    return ["swaymsg", "output", output, "bg", str(image_path), "fill"]
+
+
+def outputs_command() -> list[str]:
+    return ["swaymsg", "-t", "get_outputs", "-r"]
 
 
 def open_command(image_path: Path) -> list[str]:
