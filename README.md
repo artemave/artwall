@@ -2,10 +2,11 @@
 
 Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 the [Metropolitan Museum of Art's open collection](https://metmuseum.github.io/).
-Each run picks random paintings, downloads them, burns a small caption (artist,
-title, date) into the bottom-right corner, and sets a **different** painting on
-each connected display. Pure Python standard library — no third-party
-dependencies.
+Each run picks random paintings and sets a **different** one on each connected
+display. Every painting is shown *whole* — never cropped — centered on a soft
+gradient (sampled from its own colours) that fills the margins, with a small
+caption (artist, title, date) in the bottom-right corner. Pure Python standard
+library — no third-party dependencies.
 
 Requires Python 3.10+, `swaymsg` (Sway), and ImageMagick 7 (`magick`, for the
 caption).

@@ -5,11 +5,16 @@ from artwall import commands
 
 
 class Commands(unittest.TestCase):
-    def test_annotate_command(self):
-        argv = commands.annotate_command(Path("/tmp/current.jpg"), "Monet — Water Lilies 1916")
+    def test_compose_command(self):
+        argv = commands.compose_command(
+            Path("/tmp/current.jpg"), "Monet — Water Lilies 1916", 2560, 1440
+        )
         self.assertEqual(argv[0], "magick")
-        self.assertEqual(argv[1], "/tmp/current.jpg")  # read
         self.assertEqual(argv[-1], "/tmp/current.jpg")  # written in place
+        self.assertEqual(argv.count("/tmp/current.jpg"), 3)  # two reads + one write
+        self.assertIn("2560x1440!", argv)  # gradient canvas at the display size
+        self.assertIn("2560x1440", argv)  # painting fitted within it
+        self.assertIn("-composite", argv)
         self.assertIn("-annotate", argv)
         self.assertIn(" Monet — Water Lilies 1916 ", argv)
 

@@ -8,26 +8,40 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def annotate_command(image_path: Path, text: str) -> list[str]:
-    """Burn a caption into the bottom-right corner of the image, in place.
+def compose_command(image_path: Path, text: str, width: int, height: int) -> list[str]:
+    """Lay the painting, fully visible, on a colour-matched gradient, in place.
 
-    Uses ImageMagick 7 (`magick`); the undercolor box keeps the text legible
-    over any painting.
+    Builds a `width`x`height` canvas (the display's pixel size) so nothing is
+    cropped. The background is the painting shrunk to 2x2 — four quadrant-average
+    colours — then stretched back up, which interpolates into a soft gradient in
+    the artwork's own palette. The painting is then fitted (aspect preserved,
+    letterboxed) and centred over it, and the caption burned into the corner.
+
+    One ImageMagick 7 (`magick`) invocation; it reads `image_path` before writing
+    it, so reading and writing the same path is safe.
     """
     path = str(image_path)
+    canvas = f"{width}x{height}"
     return [
         "magick",
-        path,
+        # gradient backfill from the painting's own quadrant colours
+        "(", path, "-resize", "2x2!", "-filter", "triangle", "-resize", f"{canvas}!", ")",
+        # the painting itself, fitted whole inside the canvas
+        "(", path, "-resize", canvas, ")",
+        "-gravity", "center", "-composite",
+        # caption, bottom-right, legible over anything via the undercolor box
         "-gravity", "SouthEast",
         "-pointsize", "22",
         "-fill", "white",
         "-undercolor", "#00000099",
-        "-annotate", "+24+24", f" {text} ",
+        "-annotate", "+24+64", f" {text} ",
         path,
     ]
 
 
 def wallpaper_command(output: str, image_path: Path) -> list[str]:
+    # The composed image is already the display's exact size, so `fill` is a
+    # 1:1 blit — no cropping, no scaling.
     return ["swaymsg", "output", output, "bg", str(image_path), "fill"]
 
 

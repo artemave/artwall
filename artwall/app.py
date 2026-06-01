@@ -5,12 +5,23 @@ import random
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import cache, commands, met, selection
 from .config import Config
 
 ATTEMPTS = 20
+
+# Preview has no display to target, so render it at a common desktop size.
+PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
+
+
+class Output(NamedTuple):
+    """A connected display: its name and its pixel size."""
+
+    name: str
+    width: int
+    height: int
 
 
 def painting_ids(config: Config) -> list[int]:
@@ -64,13 +75,16 @@ def choose(
     raise RuntimeError("Could not find artwork with an image")
 
 
-def parse_outputs(raw: str) -> list[str]:
-    """Names of the active outputs in `swaymsg -t get_outputs -r` JSON."""
-    names: list[str] = [o["name"] for o in json.loads(raw) if o["active"]]
-    return names
+def parse_outputs(raw: str) -> list[Output]:
+    """Active outputs (name + pixel size) from `swaymsg -t get_outputs -r` JSON."""
+    return [
+        Output(o["name"], o["current_mode"]["width"], o["current_mode"]["height"])
+        for o in json.loads(raw)
+        if o["active"]
+    ]
 
 
-def sway_outputs() -> list[str]:  # pragma: no cover - needs a live Sway compositor
+def sway_outputs() -> list[Output]:  # pragma: no cover - needs a live Sway compositor
     result = subprocess.run(
         commands.outputs_command(), capture_output=True, text=True, check=True
     )
@@ -84,11 +98,14 @@ def _render(
     ids: list[int],
     exclude: list[int],
     image_path: Path,
+    width: int,
+    height: int,
 ) -> int:
-    """Pick a painting (avoiding `exclude`), download it, and caption it."""
+    """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`."""
     object_id, data, image_url = choose(config, ids, rng, exclude)
     met.download(image_url, image_path)
-    runner(commands.annotate_command(image_path, selection.caption(data)), check=True)
+    command = commands.compose_command(image_path, selection.caption(data), width, height)
+    runner(command, check=True)
     return object_id
 
 
@@ -96,7 +113,7 @@ def run(
     config: Config | None = None,
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
-    get_outputs: Callable[[], list[str]] = sway_outputs,
+    get_outputs: Callable[[], list[Output]] = sway_outputs,
     min_interval: float = 0.0,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
@@ -118,9 +135,11 @@ def run(
 
     shown: list[int] = []
     for output in get_outputs():
-        image_path = config.output_image(output)
-        shown.append(_render(config, rng, runner, ids, shown, image_path))
-        runner(commands.wallpaper_command(output, image_path), check=True)
+        image_path = config.output_image(output.name)
+        shown.append(
+            _render(config, rng, runner, ids, shown, image_path, output.width, output.height)
+        )
+        runner(commands.wallpaper_command(output.name, image_path), check=True)
 
     config.stamp.touch()
     return shown
@@ -141,7 +160,7 @@ def preview(
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     ids = painting_ids(config)
-    _render(config, rng, runner, ids, [], config.preview_image)
+    _render(config, rng, runner, ids, [], config.preview_image, PREVIEW_WIDTH, PREVIEW_HEIGHT)
     runner(commands.open_command(config.preview_image), check=True)
 
     return config.preview_image

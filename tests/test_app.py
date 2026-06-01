@@ -59,8 +59,8 @@ def config_for(server, cache_dir):
 
 
 def outputs(*names):
-    """A real get_outputs provider returning fixed display names."""
-    return lambda: list(names)
+    """A real get_outputs provider returning fixed displays (each 1920x1080)."""
+    return lambda: [app.Output(name, 1920, 1080) for name in names]
 
 
 class RunTests(unittest.TestCase):
@@ -86,12 +86,13 @@ class RunTests(unittest.TestCase):
         image = self.cache_dir / "current-DP-1.jpg"
         self.assertEqual(image.read_bytes(), IMAGE_BYTES)
 
-        annotate_call, wallpaper_call = runner.calls
-        annotate_argv = annotate_call[0]
-        self.assertEqual(annotate_argv[0], "magick")
-        caption_arg = annotate_argv[annotate_argv.index("-annotate") + 2]
+        compose_call, wallpaper_call = runner.calls
+        compose_argv = compose_call[0]
+        self.assertEqual(compose_argv[0], "magick")
+        self.assertIn("1920x1080!", compose_argv)  # gradient canvas at the display's size
+        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
         self.assertIn(f"Painting {object_id}", caption_arg)
-        self.assertEqual(annotate_call[1], True)  # check=True: a failed caption fails the run
+        self.assertEqual(compose_call[1], True)  # check=True: a failed compose fails the run
         self.assertEqual(
             wallpaper_call,
             (["swaymsg", "output", "DP-1", "bg", str(image), "fill"], True),
@@ -170,17 +171,26 @@ class PreviewTests(unittest.TestCase):
 
 
 class ParseOutputs(unittest.TestCase):
-    def test_returns_active_output_names(self):
+    def test_returns_active_outputs_with_size(self):
         raw = json.dumps(
-            [{"name": "DP-1", "active": True}, {"name": "HDMI-A-1", "active": True}]
+            [
+                {"name": "DP-1", "active": True, "current_mode": {"width": 2560, "height": 1440}},
+                {"name": "HDMI-A-1", "active": True, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
+            ]
         )
-        self.assertEqual(app.parse_outputs(raw), ["DP-1", "HDMI-A-1"])
+        self.assertEqual(
+            app.parse_outputs(raw),
+            [app.Output("DP-1", 2560, 1440), app.Output("HDMI-A-1", 1920, 1080)],
+        )
 
     def test_skips_inactive_outputs(self):
         raw = json.dumps(
-            [{"name": "DP-1", "active": True}, {"name": "DP-2", "active": False}]
+            [
+                {"name": "DP-1", "active": True, "current_mode": {"width": 1920, "height": 1080}},
+                {"name": "DP-2", "active": False, "current_mode": {"width": 1920, "height": 1080}},
+            ]
         )
-        self.assertEqual(app.parse_outputs(raw), ["DP-1"])
+        self.assertEqual(app.parse_outputs(raw), [app.Output("DP-1", 1920, 1080)])
 
 
 class ThrottleTests(unittest.TestCase):

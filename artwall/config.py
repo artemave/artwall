@@ -6,7 +6,7 @@ from pathlib import Path
 DEFAULT_CACHE = Path.home() / ".cache" / "artwall"
 SEARCH_URL = "https://collectionapi.metmuseum.org/public/collection/v1/search"
 OBJECT_URL = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
-IDS_TTL = 7 * 24 * 60 * 60
+IDS_TTL = 30 * 24 * 60 * 60  # the painting-ID catalogue rarely changes; refetch monthly
 
 
 @dataclass

@@ -6,8 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A standard-library-only Python tool that sets a random painting from the
 [Met Museum open collection API](https://metmuseum.github.io/) as the **Sway**
-desktop wallpaper, with a caption (artist/title/date) burned into the corner via
-ImageMagick. It's a **oneshot** — sets the wallpaper once and exits. Rotation is
+desktop wallpaper. The painting is composed (via ImageMagick) onto a
+display-sized canvas so it's shown *whole* (no cropping); the letterbox margins
+are filled with a soft gradient sampled from the painting's own colours, and a
+caption (artist/title/date) is burned into the corner. It's a **oneshot** —
+sets the wallpaper once and exits. Rotation is
 driven by Sway events, not a daemon: the Sway config subscribes to window-focus
 events and runs artwall on each, with `--min-interval` throttling it to ~every 30
 min. Launched as a child of Sway, it inherits `SWAYSOCK` — no systemd, no env
@@ -40,8 +43,8 @@ it can be tested without network or `swaymsg`.
 - `artwall/met.py` — low-level HTTP (`get_json`, `download`) over `urllib`.
 - `artwall/selection.py` — **pure** decision logic (image-URL precedence,
   caption formatting). Prefer adding new logic here so it stays unit-testable.
-- `artwall/commands.py` — pure argv builders for `magick` (caption) and
-  `swaymsg`.
+- `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
+  compose + caption) and `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
   min_interval)` injects `rng`, `runner`, and `get_outputs` (defaulting to
   `random`, `subprocess.run`, and `sway_outputs`) so the full flow can be driven
@@ -50,19 +53,22 @@ it can be tested without network or `swaymsg`.
 Flow in `run()`: if `min_interval` > 0 and `config.stamp` was touched more
 recently than that, return early (the event-driven throttle). Otherwise:
 fetch/cache painting IDs → query the active outputs (`get_outputs`, default
-`sway_outputs()` → `swaymsg -t get_outputs`) → for each display, pick a random ID
-with an image (retry up to `ATTEMPTS`), download, `magick`-caption to
-`current-<output>.jpg`, `swaymsg output <name> bg` → touch `config.stamp`.
-Selection is plain random — no persisted history — but ids already chosen this
-run are excluded so each display gets a *different* painting. The
-pick/download/caption step is `_render()`, also used by `preview()` (the
-`--preview` flag), which writes `preview.jpg`, opens it with `xdg-open`, and
-leaves the wallpaper untouched.
+`sway_outputs()` → `swaymsg -t get_outputs`; each is an `Output` carrying name +
+pixel size) → for each display, pick a random ID with an image (retry up to
+`ATTEMPTS`), download, `magick`-compose it onto an `Output`-sized gradient canvas
+(whole painting + caption) at `current-<output>.jpg`, `swaymsg output <name> bg
+… fill` (a 1:1 blit, since the canvas is already the display's size) → touch
+`config.stamp`. Selection is plain random — no persisted history — but ids
+already chosen this run are excluded so each display gets a *different* painting.
+The pick/download/compose step is `_render()` (takes the target width/height),
+also used by `preview()` (the `--preview` flag), which composes at a default
+1920x1080, writes `preview.jpg`, opens it with `xdg-open`, and leaves the
+wallpaper untouched.
 
 `sway_outputs()` is the one function excluded from coverage (`# pragma: no
-cover`) — it needs a live Sway compositor; its JSON parsing is split into the
-pure, tested `parse_outputs()`. All state is cached under `~/.cache/artwall/`;
-deleting it is a safe reset.
+cover`) — it needs a live Sway compositor; its JSON parsing (name +
+`current_mode` size) is split into the pure, tested `parse_outputs()`. All
+state is cached under `~/.cache/artwall/`; deleting it is a safe reset.
 
 ## Testing conventions
 
