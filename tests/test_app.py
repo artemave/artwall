@@ -4,6 +4,7 @@ import random
 import tempfile
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 from artwall import app
@@ -23,26 +24,38 @@ class Recorder:
         self.calls.append((argv, check))
 
 
-def met_router(ids, images):
-    """Serve a tiny Met API: a search result, per-object metadata, and images.
+def wikidata_router(qids, missing=(), anonymous=()):
+    """Serve a tiny Wikidata/Commons: WDQS catalogue CSV, Action-API entities, images.
 
-    `images` maps object_id -> bool (whether it has a primaryImage).
+    `missing` QIDs come back with no image (as if deleted since the catalogue
+    cached) so the caller re-picks; `anonymous` QIDs have no creator.
     """
+    missing, anonymous = set(missing), set(anonymous)
+
+    def entity(num):
+        if num in missing:
+            return {"claims": {}, "labels": {}}  # no P18 -> parse_entity returns None
+        claims = {"P18": [{"mainsnak": {"datavalue": {"value": f"Q{num}.jpg"}}}]}
+        if num not in anonymous:
+            when = {"time": "+1700-00-00T00:00:00Z"}
+            claims["P170"] = [{"mainsnak": {"datavalue": {"value": {"id": "Q999"}}}}]
+            claims["P571"] = [{"mainsnak": {"datavalue": {"value": when}}}]
+        return {"claims": claims, "labels": {"en": {"value": f"Painting {num}"}}}
 
     def router(path):
-        if path.startswith("/search"):
-            return 200, "application/json", json.dumps({"objectIDs": ids}).encode()
-        if path.startswith("/objects/"):
-            object_id = int(path.rsplit("/", 1)[1])
-            meta = {
-                "title": f"Painting {object_id}",
-                "artistDisplayName": "Tester",
-                "objectDate": "1900",
-            }
-            if images.get(object_id):
-                meta["primaryImage"] = router.base + f"/img/{object_id}.jpg"
-            return 200, "application/json", json.dumps(meta).encode()
-        if path.startswith("/img/"):
+        parsed = urllib.parse.urlparse(path)
+        params = urllib.parse.parse_qs(parsed.query)
+        if parsed.path == "/sparql":  # catalogue (the only WDQS use)
+            body = "qid\n" + "\n".join(str(q) for q in qids)
+            return 200, "text/csv", body.encode()
+        if parsed.path == "/api":  # wbgetentities for a painting or its creator
+            eid = params["ids"][0]
+            if eid == "Q999":  # the shared creator
+                body = {"entities": {"Q999": {"labels": {"en": {"value": "Tester"}}}}}
+            else:
+                body = {"entities": {eid: entity(int(eid[1:]))}}
+            return 200, "application/json", json.dumps(body).encode()
+        if parsed.path.startswith("/img/"):
             return 200, "image/jpeg", IMAGE_BYTES
         return 404, "text/plain", b"not found"
 
@@ -53,8 +66,9 @@ def met_router(ids, images):
 def config_for(server, cache_dir):
     return Config(
         cache_dir=cache_dir,
-        search_url=server.base_url + "/search",
-        object_url=server.base_url + "/objects/{}",
+        sparql_url=server.base_url + "/sparql",
+        api_url=server.base_url + "/api",
+        commons_url=server.base_url + "/img/",
     )
 
 
@@ -68,7 +82,7 @@ class RunTests(unittest.TestCase):
         self.cache_dir = Path(tempfile.mkdtemp())
 
     def test_happy_path_sets_wallpaper(self):
-        router = met_router([101, 102], {101: True, 102: True})
+        router = wikidata_router([101, 102])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
@@ -80,8 +94,8 @@ class RunTests(unittest.TestCase):
             )
 
         self.assertEqual(len(shown), 1)
-        object_id = shown[0]
-        self.assertIn(object_id, [101, 102])
+        qid = shown[0]
+        self.assertIn(qid, [101, 102])
 
         image = self.cache_dir / "current-DP-1.jpg"
         self.assertEqual(image.read_bytes(), IMAGE_BYTES)
@@ -91,7 +105,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(compose_argv[0], "magick")
         self.assertIn("1920x1080!", compose_argv)  # gradient canvas at the display's size
         caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
-        self.assertIn(f"Painting {object_id}", caption_arg)
+        self.assertIn(f"Painting {qid}", caption_arg)
         self.assertEqual(compose_call[1], True)  # check=True: a failed compose fails the run
         self.assertEqual(
             wallpaper_call,
@@ -99,7 +113,7 @@ class RunTests(unittest.TestCase):
         )
 
     def test_each_display_gets_a_different_painting(self):
-        router = met_router([101, 102], {101: True, 102: True})
+        router = wikidata_router([101, 102])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
@@ -117,21 +131,51 @@ class RunTests(unittest.TestCase):
         for name in ("DP-1", "HDMI-A-1"):
             self.assertTrue((self.cache_dir / f"current-{name}.jpg").exists())
 
-    def test_ids_are_cached_after_first_fetch(self):
-        router = met_router([101], {101: True})
+    def test_catalogue_is_cached_after_first_fetch(self):
+        router = wikidata_router([101])
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
             app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
-            search_hits = sum(1 for p in s.requests if p.startswith("/search"))
+            catalogue_hits = sum(1 for p in s.requests if p.startswith("/sparql"))
             app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
-            search_hits_after = sum(1 for p in s.requests if p.startswith("/search"))
+            catalogue_hits_after = sum(1 for p in s.requests if p.startswith("/sparql"))
 
-        self.assertEqual(search_hits, 1)
-        self.assertEqual(search_hits_after, 1)  # served from cache, no second search
+        self.assertEqual(catalogue_hits, 1)
+        self.assertEqual(catalogue_hits_after, 1)  # served from cache, no second catalogue
 
-    def test_raises_when_no_artwork_has_an_image(self):
-        router = met_router([101, 102], {101: False, 102: False})
+    def test_retries_past_a_vanished_painting(self):
+        # 101 comes back empty (deleted/no image); only 102 is usable.
+        router = wikidata_router([101, 102], missing={101})
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+            )
+
+        self.assertEqual(shown, [102])  # the vanished 101 was skipped
+
+    def test_anonymous_painting_gets_unknown_artist(self):
+        router = wikidata_router([101], anonymous={101})
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1"),
+            )
+
+        compose_argv = runner.calls[0][0]
+        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
+        self.assertIn("Unknown artist", caption_arg)  # no creator -> caption default
+
+    def test_raises_when_no_painting_is_usable(self):
+        router = wikidata_router([101, 102], missing={101, 102})
         with serve(router) as s:
             router.base = s.base_url
             with self.assertRaises(RuntimeError):
@@ -148,7 +192,7 @@ class PreviewTests(unittest.TestCase):
         self.cache_dir = Path(tempfile.mkdtemp())
 
     def test_opens_preview_without_touching_the_wallpaper(self):
-        router = met_router([101, 102], {101: True, 102: True})
+        router = wikidata_router([101, 102])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
@@ -161,8 +205,8 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(path, self.cache_dir / "preview.jpg")
         self.assertEqual(path.read_bytes(), IMAGE_BYTES)
 
-        annotate_call, open_call = runner.calls
-        self.assertEqual(annotate_call[0][0], "magick")
+        compose_call, open_call = runner.calls
+        self.assertEqual(compose_call[0][0], "magick")
         self.assertEqual(open_call, (["xdg-open", str(path)], True))
 
         # The wallpaper is untouched: no swaymsg, no per-output image written.
@@ -200,7 +244,7 @@ class ThrottleTests(unittest.TestCase):
     def test_skips_when_changed_recently(self):
         (self.cache_dir / "last_change").touch()  # a change just happened
 
-        router = met_router([101, 102], {101: True, 102: True})
+        router = wikidata_router([101, 102])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
@@ -209,7 +253,7 @@ class ThrottleTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1"),
-                min_interval=1800,
+                throttle=True,
             )
 
         self.assertEqual(shown, [])  # nothing chosen
@@ -221,7 +265,7 @@ class ThrottleTests(unittest.TestCase):
         an_hour_ago = time.time() - 3600
         os.utime(stamp, (an_hour_ago, an_hour_ago))
 
-        router = met_router([101, 102], {101: True, 102: True})
+        router = wikidata_router([101, 102])
         with serve(router) as s:
             router.base = s.base_url
             shown = app.run(
@@ -229,7 +273,7 @@ class ThrottleTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=Recorder(),
                 get_outputs=outputs("DP-1"),
-                min_interval=1800,
+                throttle=True,
             )
 
         self.assertEqual(len(shown), 1)
@@ -241,12 +285,11 @@ class PaintingIdsTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir = Path(tempfile.mkdtemp())
 
-    def test_raises_when_search_returns_no_ids(self):
-        def router(path):
-            return 200, "application/json", json.dumps({"objectIDs": []}).encode()
-
+    def test_raises_when_catalogue_is_empty(self):
+        router = wikidata_router([])  # catalogue CSV has only the header
         with serve(router) as s:
-            cfg = Config(cache_dir=self.cache_dir, search_url=s.base_url + "/search")
+            router.base = s.base_url
+            cfg = config_for(s, self.cache_dir)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             with self.assertRaises(RuntimeError):
                 app.painting_ids(cfg)

@@ -7,13 +7,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import cache, commands, met, selection
+from . import cache, commands, selection, web, wikidata
 from .config import Config
 
-ATTEMPTS = 20
+# A cached QID may have lost its image or been deleted since; re-pick a few times
+# before giving up. Hits are rare, so this almost always succeeds first try.
+ATTEMPTS = 10
 
 # Preview has no display to target, so render it at a common desktop size.
 PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
+
+LANGUAGE = "en"  # caption/label language
 
 
 class Output(NamedTuple):
@@ -29,26 +33,37 @@ def painting_ids(config: Config) -> list[int]:
         cached: list[int] = cache.load_json(config.ids_file, [])
         return cached
 
-    data: dict[str, Any] = met.get_json(config.search_url, {"hasImages": "true", "q": "painting"})
-    ids: list[int] = data.get("objectIDs") or []
+    query = wikidata.catalogue_query()
+    csv_text = web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
+    ids = wikidata.parse_catalogue(csv_text)
 
     if not ids:
-        raise RuntimeError("Met API returned no object IDs")
+        raise RuntimeError("Wikidata returned no paintings")
 
     cache.save_json(config.ids_file, ids)
     return ids
 
 
-def metadata(config: Config, object_id: int) -> dict[str, Any]:
-    file = config.cache_dir / f"{object_id}.json"
+def _get_entity(config: Config, entity_id: str, props: str) -> dict[str, Any]:
+    result: dict[str, Any] = web.get_json(
+        config.api_url,
+        {
+            "action": "wbgetentities",
+            "ids": entity_id,
+            "props": props,
+            "languages": LANGUAGE,
+            "format": "json",
+        },
+    )
+    return result
 
-    if file.exists():
-        cached: dict[str, Any] = cache.load_json(file, {})
-        return cached
 
-    data: dict[str, Any] = met.get_json(config.object_url.format(object_id))
-    cache.save_json(file, data)
-    return data
+def _artist(config: Config, creator_qid: str) -> str:
+    """Resolve a creator QID to a name (a second Action-API call), or ""."""
+    if not creator_qid:
+        return ""
+    result = _get_entity(config, creator_qid, "labels")
+    return wikidata.label(result, creator_qid, LANGUAGE)
 
 
 def choose(
@@ -57,22 +72,24 @@ def choose(
     rng: random.Random,
     exclude: list[int],
     attempts: int = ATTEMPTS,
-) -> tuple[int, dict[str, Any], str]:
-    """Pick a random artwork that has an image, avoiding ids in `exclude`.
+) -> tuple[int, dict[str, str]]:
+    """Pick a random painting (avoiding `exclude`) and fetch its image + caption.
 
-    `exclude` holds the ids already used this run, so several displays each get
-    a different painting.
+    Per-painting data comes from the Action API, not WDQS, so a query-service
+    outage doesn't break runs once the catalogue is cached. `exclude` holds the
+    ids already used this run, so several displays each get a different painting.
     """
     candidates = [i for i in ids if i not in exclude]
 
     for _ in range(attempts):
-        object_id = rng.choice(candidates)
-        data = metadata(config, object_id)
-        image_url = selection.pick_image_url(data)
-        if image_url:
-            return object_id, data, image_url
+        qid = rng.choice(candidates)
+        result = _get_entity(config, f"Q{qid}", "claims|labels")
+        painting = wikidata.parse_entity(result, qid, LANGUAGE)
+        if painting:
+            painting["artist"] = _artist(config, painting["creator_qid"])
+            return qid, painting
 
-    raise RuntimeError("Could not find artwork with an image")
+    raise RuntimeError("Could not fetch a usable painting from Wikidata")
 
 
 def parse_outputs(raw: str) -> list[Output]:
@@ -102,11 +119,13 @@ def _render(
     height: int,
 ) -> int:
     """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`."""
-    object_id, data, image_url = choose(config, ids, rng, exclude)
-    met.download(image_url, image_path)
-    command = commands.compose_command(image_path, selection.caption(data), width, height)
+    qid, painting = choose(config, ids, rng, exclude)
+    url = wikidata.image_url(config.commons_url, painting["image"], width)
+    web.download(url, image_path)
+    caption = selection.caption(painting)
+    command = commands.compose_command(image_path, caption, width, height)
     runner(command, check=True)
-    return object_id
+    return qid
 
 
 def run(
@@ -114,21 +133,21 @@ def run(
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
     get_outputs: Callable[[], list[Output]] = sway_outputs,
-    min_interval: float = 0.0,
+    throttle: bool = False,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
 
-    With `min_interval` > 0, do nothing if the last change was more recent than
-    that — so this can be triggered from frequent Sway events (e.g. window
-    focus) without thrashing the wallpaper. `rng`, `runner` and `get_outputs`
-    are injected so tests can drive run() deterministically — no mocks, no real
-    Sway.
+    With `throttle`, do nothing if the last change was more recent than
+    `config.min_interval` — so this can be triggered from frequent Sway events
+    (e.g. window focus) without thrashing the wallpaper. `rng`, `runner` and
+    `get_outputs` are injected so tests can drive run() deterministically — no
+    mocks, no real Sway.
     """
     config = config or Config()
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    if min_interval and cache.fresh(config.stamp, min_interval):
+    if throttle and cache.fresh(config.stamp, config.min_interval):
         return []
 
     ids = painting_ids(config)

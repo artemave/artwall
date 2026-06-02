@@ -8,16 +8,15 @@ from .app import preview, run
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="artwall",
-        description="Set a random Met Museum painting as the Sway wallpaper.",
+        description="Set a random Wikidata painting as the Sway wallpaper.",
     )
     parser.add_argument(
-        "--min-interval",
-        type=float,
-        default=0.0,
-        metavar="SECONDS",
-        help="Skip the change if the previous one happened less than SECONDS ago. "
-        "Use this when triggering from frequent Sway events (e.g. window focus) so "
-        "the wallpaper rotates at most every SECONDS instead of on every event.",
+        "--throttle",
+        action="store_true",
+        help="Skip the change if the previous one happened less than the configured "
+        "interval ago (Config.min_interval). Use this when triggering from frequent "
+        "Sway events (e.g. window focus) so the wallpaper rotates at most that often "
+        "instead of on every event.",
     )
     parser.add_argument(
         "--preview",
@@ -30,7 +29,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.preview:
         preview()
     else:
-        run(min_interval=args.min_interval)
+        run(throttle=args.throttle)
 
 
 if __name__ == "__main__":

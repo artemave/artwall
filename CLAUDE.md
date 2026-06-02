@@ -4,17 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A standard-library-only Python tool that sets a random painting from the
-[Met Museum open collection API](https://metmuseum.github.io/) as the **Sway**
-desktop wallpaper. The painting is composed (via ImageMagick) onto a
-display-sized canvas so it's shown *whole* (no cropping); the letterbox margins
-are filled with a soft gradient sampled from the painting's own colours, and a
-caption (artist/title/date) is burned into the corner. It's a **oneshot** —
-sets the wallpaper once and exits. Rotation is
-driven by Sway events, not a daemon: the Sway config subscribes to window-focus
-events and runs artwall on each, with `--min-interval` throttling it to ~every 30
-min. Launched as a child of Sway, it inherits `SWAYSOCK` — no systemd, no env
-import. No third-party Python dependencies — keep it that way (use `urllib`, not
+A standard-library-only Python tool that sets a random painting from
+[Wikidata](https://www.wikidata.org/) (every `instance of: painting` that has an
+image — ~400k) as the **Sway** desktop wallpaper. The painting is composed (via
+ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); the
+letterbox margins are filled with a soft gradient sampled from the painting's own
+colours, and a caption (artist/title/date) is burned into the corner. It's a
+**oneshot** — sets the wallpaper once and exits. Rotation is driven by Sway
+events, not a daemon: the Sway config subscribes to window-focus events and runs
+artwall on each, with `--throttle` (using `Config.min_interval`) limiting it to
+~every 30 min. Launched
+as a child of Sway, it inherits `SWAYSOCK` — no systemd, no env import. No
+third-party Python dependencies — keep it that way (use `urllib`, not
 `requests`); external CLI tools (`swaymsg`, `magick`) are fine since we already
 shell out.
 
@@ -28,7 +29,7 @@ make install-dev                        # dev tooling: ruff, mypy, coverage
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
 python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
-python3 -m artwall --min-interval 1800   # set once, but no-op if changed <1800s ago (event-driven throttle)
+python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (event throttle)
 ```
 
 ## Architecture
@@ -36,46 +37,60 @@ python3 -m artwall --min-interval 1800   # set once, but no-op if changed <1800s
 The entry point is intentionally thin; all logic lives in importable modules so
 it can be tested without network or `swaymsg`.
 
-- `artwall/config.py` — `Config` dataclass holding cache paths, Met endpoints,
-  and TTLs. **This is the test seam:** tests build a `Config` pointing at a temp
-  dir and a local HTTP server. Don't hardcode paths/URLs elsewhere.
+- `artwall/config.py` — `Config` dataclass holding cache paths and the Wikidata
+  endpoints (`sparql_url` for WDQS, `api_url` for the Action API, `commons_url`
+  for images) plus `ids_ttl`. **This is the test seam:** tests build a `Config`
+  pointing at a temp dir and a local HTTP server. Don't hardcode paths/URLs
+  elsewhere.
 - `artwall/cache.py` — JSON load/save + `fresh()` (mtime-based TTL).
-- `artwall/met.py` — low-level HTTP (`get_json`, `download`) over `urllib`.
-- `artwall/selection.py` — **pure** decision logic (image-URL precedence,
-  caption formatting). Prefer adding new logic here so it stays unit-testable.
+- `artwall/web.py` — low-level HTTP (`get_json`, `get_text`, `download`) over
+  `urllib`, with a Wikimedia-compliant User-Agent and an `accept` arg (WDQS picks
+  its result format — JSON vs CSV — from the `Accept` header, not a query param).
+- `artwall/wikidata.py` — **pure** source logic: build the catalogue SPARQL
+  (`catalogue_query`) and parse its CSV (`parse_catalogue`); parse an Action-API
+  entity into image-filename/creator/title/year (`parse_entity`) and read a
+  `label`; build the sized Commons image URL from a filename (`image_url` →
+  `Special:FilePath/<file>?width=`). Prefer adding source logic here. **Two
+  services on purpose:** WDQS (`sparql_url`) is outage-prone, so it's used *only*
+  for the monthly catalogue; every per-painting fetch goes to the stable Action
+  API.
+- `artwall/selection.py` — **pure** `caption` formatting (artist/title/date).
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + caption) and `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
-  min_interval)` injects `rng`, `runner`, and `get_outputs` (defaulting to
-  `random`, `subprocess.run`, and `sway_outputs`) so the full flow can be driven
+  throttle)` injects `rng`, `runner`, and `get_outputs` (defaulting to `random`,
+  `subprocess.run`, and `sway_outputs`) so the full flow can be driven
   deterministically.
 
-Flow in `run()`: if `min_interval` > 0 and `config.stamp` was touched more
-recently than that, return early (the event-driven throttle). Otherwise:
-fetch/cache painting IDs → query the active outputs (`get_outputs`, default
-`sway_outputs()` → `swaymsg -t get_outputs`; each is an `Output` carrying name +
-pixel size) → for each display, pick a random ID with an image (retry up to
-`ATTEMPTS`), download, `magick`-compose it onto an `Output`-sized gradient canvas
-(whole painting + caption) at `current-<output>.jpg`, `swaymsg output <name> bg
-… fill` (a 1:1 blit, since the canvas is already the display's size) → touch
-`config.stamp`. Selection is plain random — no persisted history — but ids
-already chosen this run are excluded so each display gets a *different* painting.
-The pick/download/compose step is `_render()` (takes the target width/height),
-also used by `preview()` (the `--preview` flag), which composes at a default
-1920x1080, writes `preview.jpg`, opens it with `xdg-open`, and leaves the
-wallpaper untouched.
+Flow in `run()`: if `throttle` and `config.stamp` was touched more recently than
+`config.min_interval`, return early (the event-driven throttle). Otherwise:
+fetch/cache the catalogue (one SPARQL query → all painting QIDs as a CSV of bare
+ints) → query the active outputs (`get_outputs`, default `sway_outputs()` →
+`swaymsg -t get_outputs`; each is an `Output` carrying name + pixel size) → for
+each display, pick a random QID and fetch its image filename + title/date via the
+Action API (`wbgetentities`), then a second `wbgetentities` for the creator's
+name (retry up to `ATTEMPTS` only to skip a QID that has since lost its image),
+build and download a width-capped Commons thumbnail, `magick`-compose it onto an
+`Output`-sized gradient canvas (whole painting + caption) at
+`current-<output>.jpg`, `swaymsg output <name> bg … fill` (a 1:1 blit, since the
+canvas is already the display's size) → touch `config.stamp`. Selection is plain
+random — no persisted history — but QIDs already chosen this run are excluded so
+each display gets a *different* painting. The pick/download/compose step is
+`_render()` (takes the target width/height), also used by `preview()` (the
+`--preview` flag), which composes at a default 1920x1080, writes `preview.jpg`,
+opens it with `xdg-open`, and leaves the wallpaper untouched.
 
 `sway_outputs()` is the one function excluded from coverage (`# pragma: no
 cover`) — it needs a live Sway compositor; its JSON parsing (name +
-`current_mode` size) is split into the pure, tested `parse_outputs()`. All
-state is cached under `~/.cache/artwall/`; deleting it is a safe reset.
+`current_mode` size) is split into the pure, tested `parse_outputs()`. All state
+is cached under `~/.cache/artwall/`; deleting it is a safe reset.
 
 ## Testing conventions
 
 No mocks (per the repo's global rule). Achieved by:
 - Pure functions tested directly.
 - The HTTP layer tested against a **real** loopback server (`tests/server.py`,
-  `serve(router)`).
+  `serve(router)`) standing in for Wikidata.
 - `run()` tested with a real seeded `random.Random` and a `Recorder` callable
   that captures argv instead of executing `magick`/`swaymsg`.
 
@@ -86,7 +101,7 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 No installer and no systemd. The user adds two lines to their Sway config: one
 `exec` to set a wallpaper at startup, and one that subscribes to window events
-and runs artwall per event with `--min-interval 1800` (see README). `bin/artwall`
+and runs artwall per event with `--throttle` (see README). `bin/artwall`
 is a small shell launcher that sets `PYTHONPATH` to the repo and execs `python3
 -m artwall "$@"` — nothing more. A failed run prints to Sway's stderr and is
 skipped; it doesn't touch the stamp, so the next event retries. Because the
