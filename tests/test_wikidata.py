@@ -4,10 +4,35 @@ from artwall import wikidata
 
 
 class CatalogueQuery(unittest.TestCase):
-    def test_query_has_painting_and_image(self):
+    def test_bare_query_has_painting_and_image(self):
         q = wikidata.catalogue_query()
         self.assertIn("wd:Q3305213", q)  # painting
         self.assertIn("wdt:P18", q)  # has image
+        self.assertNotIn("FILTER", q)
+        self.assertNotIn("VALUES", q)
+
+    def test_date_window_adds_year_filter(self):
+        q = wikidata.catalogue_query(date_begin=1500, date_end=1800)
+        self.assertIn("wdt:P571", q)
+        self.assertIn("YEAR(?date) >= 1500", q)
+        self.assertIn("YEAR(?date) <= 1800", q)
+
+    def test_open_ended_date_uses_sentinels(self):
+        q = wikidata.catalogue_query(date_begin=1900)
+        self.assertIn(">= 1900", q)
+        self.assertIn("<= 9999", q)
+
+    def test_filters_become_values_clauses(self):
+        q = wikidata.catalogue_query(filters={"movements": ["Q40415"], "genres": ["Q191163"]})
+        self.assertIn("wdt:P135", q)  # movement
+        self.assertIn("wdt:P136", q)  # genre
+        self.assertIn("wd:Q40415", q)
+        self.assertIn("wd:Q191163", q)
+
+    def test_empty_filter_lists_are_skipped(self):
+        q = wikidata.catalogue_query(filters={"artists": [], "movements": ["Q37853"]})
+        self.assertNotIn("P170", q)  # no artist clause
+        self.assertIn("wd:Q37853", q)
 
 
 class ParseCatalogue(unittest.TestCase):
@@ -74,6 +99,16 @@ class Label(unittest.TestCase):
     def test_empty_when_language_missing(self):
         result = {"entities": {"Q1": {"labels": {}}}}
         self.assertEqual(wikidata.label(result, "Q1", "en"), "")
+
+
+class ParseSearch(unittest.TestCase):
+    def test_returns_id_label_description_rows(self):
+        result = {"search": [{"id": "Q40415", "label": "Impressionism", "description": "movement"}]}
+        self.assertEqual(wikidata.parse_search(result), [("Q40415", "Impressionism", "movement")])
+
+    def test_tolerates_missing_label_or_description(self):
+        result = {"search": [{"id": "Q1"}]}
+        self.assertEqual(wikidata.parse_search(result), [("Q1", "", "")])
 
 
 class ImageUrl(unittest.TestCase):

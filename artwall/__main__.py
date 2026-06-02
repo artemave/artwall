@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from .app import preview, run
+from .app import preview, run, search_entities
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -24,9 +24,18 @@ def main(argv: list[str] | None = None) -> None:
         help="Generate a captioned painting and open it with xdg-open, "
         "without changing the wallpaper.",
     )
+    parser.add_argument(
+        "--find",
+        metavar="TERM",
+        help="Look up Wikidata QIDs for a name (artist, movement, genre, museum) "
+        "to drop into the config's filters, then exit.",
+    )
     args = parser.parse_args(argv)
 
-    if args.preview:
+    if args.find:
+        for qid, label, description in search_entities(args.find):
+            print(f"{qid}\t{label} — {description}")
+    elif args.preview:
         preview()
     else:
         run(throttle=args.throttle)

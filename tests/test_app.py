@@ -214,6 +214,23 @@ class PreviewTests(unittest.TestCase):
         self.assertFalse(any(self.cache_dir.glob("current-*.jpg")))
 
 
+class SearchEntities(unittest.TestCase):
+    def test_resolves_term_to_qid_rows(self):
+        def router(path):
+            body = {
+                "search": [
+                    {"id": "Q40415", "label": "Impressionism", "description": "art movement"},
+                ]
+            }
+            return 200, "application/json", json.dumps(body).encode()
+
+        with serve(router) as s:
+            cfg = Config(api_url=s.base_url + "/api")
+            rows = app.search_entities("impressionism", cfg)
+
+        self.assertEqual(rows, [("Q40415", "Impressionism", "art movement")])
+
+
 class ParseOutputs(unittest.TestCase):
     def test_returns_active_outputs_with_size(self):
         raw = json.dumps(

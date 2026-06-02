@@ -8,14 +8,17 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def compose_command(image_path: Path, text: str, width: int, height: int) -> list[str]:
+def compose_command(
+    image_path: Path, text: str, width: int, height: int, font_size: int = 22
+) -> list[str]:
     """Lay the painting, fully visible, on a colour-matched gradient, in place.
 
     Builds a `width`x`height` canvas (the display's pixel size) so nothing is
     cropped. The background is the painting shrunk to 2x2 — four quadrant-average
     colours — then stretched back up, which interpolates into a soft gradient in
     the artwork's own palette. The painting is then fitted (aspect preserved,
-    letterboxed) and centred over it, and the caption burned into the corner.
+    letterboxed) and centred over it, and the caption burned into the corner at
+    `font_size` points.
 
     One ImageMagick 7 (`magick`) invocation; it reads `image_path` before writing
     it, so reading and writing the same path is safe.
@@ -31,7 +34,7 @@ def compose_command(image_path: Path, text: str, width: int, height: int) -> lis
         "-gravity", "center", "-composite",
         # caption, bottom-right, legible over anything via the undercolor box
         "-gravity", "SouthEast",
-        "-pointsize", "22",
+        "-pointsize", str(font_size),
         "-fill", "white",
         "-undercolor", "#00000099",
         "-annotate", "+24+64", f" {text} ",

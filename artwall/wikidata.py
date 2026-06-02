@@ -1,8 +1,8 @@
-"""Pure Wikidata/Wikimedia logic — SPARQL/entity JSON in, parsed data out.
+"""Pure Wikidata/Wikimedia logic — SPARQL query strings in, parsed data out.
 
-No IO: `app` runs the catalogue query (WDQS) and per-painting lookups (Action
-API) via `web`, and the resulting image URLs are downloaded from Wikimedia
-Commons. Kept here so the source-specific bits stay unit-testable.
+No IO: `app` runs these queries via `web` and the resulting image URLs are
+downloaded from Wikimedia Commons. Kept here so the source-specific bits stay
+unit-testable.
 """
 from __future__ import annotations
 
@@ -11,12 +11,40 @@ from typing import Any
 
 PAINTING = "wd:Q3305213"  # the Wikidata item for "painting"
 
+# Config knob -> the Wikidata property it filters on. Values within one knob are
+# OR'd; separate knobs are AND'd (Impressionist landscapes = movements ∩ genres).
+FILTER_PROPERTIES = {
+    "artists": "P170",
+    "movements": "P135",
+    "genres": "P136",
+    "collections": "P195",
+}
 
-def catalogue_query() -> str:
-    """SPARQL for every painting that has an image, as bare numeric QIDs."""
+
+def catalogue_query(
+    filters: dict[str, list[str]] | None = None,
+    date_begin: int | None = None,
+    date_end: int | None = None,
+) -> str:
+    """SPARQL for every painting that has an image (and matches the filters), as
+    bare numeric QIDs.
+
+    With a date bound, restrict to works whose inception (P571) year falls in
+    range — which also drops undated works, the price of a date filter.
+    """
+    clauses = ""
+    for knob, qids in (filters or {}).items():
+        if not qids:
+            continue
+        values = " ".join(f"wd:{q}" for q in qids)
+        clauses += f"VALUES ?{knob} {{ {values} }} ?p wdt:{FILTER_PROPERTIES[knob]} ?{knob} . "
+    if date_begin is not None or date_end is not None:
+        lo = date_begin if date_begin is not None else -9999
+        hi = date_end if date_end is not None else 9999
+        clauses += f"?p wdt:P571 ?date . FILTER(YEAR(?date) >= {lo} && YEAR(?date) <= {hi}) "
     return (
         'SELECT (STRAFTER(STR(?p), "entity/Q") AS ?qid) WHERE { '
-        f"?p wdt:P31 {PAINTING} ; wdt:P18 [] . "
+        f"?p wdt:P31 {PAINTING} ; wdt:P18 [] . {clauses}"
         "}"
     )
 
@@ -65,6 +93,13 @@ def label(result: dict[str, Any], entity_id: str, language: str) -> str:
     """An entity's label in `language` from an Action-API response (or "")."""
     labels = result["entities"][entity_id]["labels"]
     return str(labels.get(language, {}).get("value", ""))
+
+
+def parse_search(result: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """(QID, label, description) rows from a wbsearchentities response."""
+    return [
+        (r["id"], r.get("label", ""), r.get("description", "")) for r in result["search"]
+    ]
 
 
 def image_url(commons_url: str, filename: str, width: int) -> str:

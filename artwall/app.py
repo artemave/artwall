@@ -17,8 +17,6 @@ ATTEMPTS = 10
 # Preview has no display to target, so render it at a common desktop size.
 PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
 
-LANGUAGE = "en"  # caption/label language
-
 
 class Output(NamedTuple):
     """A connected display: its name and its pixel size."""
@@ -29,18 +27,19 @@ class Output(NamedTuple):
 
 
 def painting_ids(config: Config) -> list[int]:
-    if cache.fresh(config.ids_file, config.ids_ttl):
-        cached: list[int] = cache.load_json(config.ids_file, [])
+    query = wikidata.catalogue_query(config.filters, config.date_begin, config.date_end)
+    cache_file = config.ids_file(query)
+    if cache.fresh(cache_file, config.ids_ttl):
+        cached: list[int] = cache.load_json(cache_file, [])
         return cached
 
-    query = wikidata.catalogue_query()
     csv_text = web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
     ids = wikidata.parse_catalogue(csv_text)
 
     if not ids:
-        raise RuntimeError("Wikidata returned no paintings")
+        raise RuntimeError("Wikidata returned no paintings for the configured filters")
 
-    cache.save_json(config.ids_file, ids)
+    cache.save_json(cache_file, ids)
     return ids
 
 
@@ -51,7 +50,7 @@ def _get_entity(config: Config, entity_id: str, props: str) -> dict[str, Any]:
             "action": "wbgetentities",
             "ids": entity_id,
             "props": props,
-            "languages": LANGUAGE,
+            "languages": config.language,
             "format": "json",
         },
     )
@@ -63,7 +62,7 @@ def _artist(config: Config, creator_qid: str) -> str:
     if not creator_qid:
         return ""
     result = _get_entity(config, creator_qid, "labels")
-    return wikidata.label(result, creator_qid, LANGUAGE)
+    return wikidata.label(result, creator_qid, config.language)
 
 
 def choose(
@@ -84,12 +83,29 @@ def choose(
     for _ in range(attempts):
         qid = rng.choice(candidates)
         result = _get_entity(config, f"Q{qid}", "claims|labels")
-        painting = wikidata.parse_entity(result, qid, LANGUAGE)
+        painting = wikidata.parse_entity(result, qid, config.language)
         if painting:
             painting["artist"] = _artist(config, painting["creator_qid"])
             return qid, painting
 
     raise RuntimeError("Could not fetch a usable painting from Wikidata")
+
+
+def search_entities(term: str, config: Config | None = None) -> list[tuple[str, str, str]]:
+    """Resolve a name to candidate (QID, label, description) rows for `--find`."""
+    config = config or Config.load()
+    result = web.get_json(
+        config.api_url,
+        {
+            "action": "wbsearchentities",
+            "search": term,
+            "language": config.language,
+            "type": "item",
+            "limit": "10",
+            "format": "json",
+        },
+    )
+    return wikidata.parse_search(result)
 
 
 def parse_outputs(raw: str) -> list[Output]:
@@ -123,7 +139,7 @@ def _render(
     url = wikidata.image_url(config.commons_url, painting["image"], width)
     web.download(url, image_path)
     caption = selection.caption(painting)
-    command = commands.compose_command(image_path, caption, width, height)
+    command = commands.compose_command(image_path, caption, width, height, config.font_size)
     runner(command, check=True)
     return qid
 
@@ -143,7 +159,7 @@ def run(
     `get_outputs` are injected so tests can drive run() deterministically — no
     mocks, no real Sway.
     """
-    config = config or Config()
+    config = config or Config.load()
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -174,7 +190,7 @@ def preview(
     The wallpaper is left untouched — this just writes a preview image and hands
     it to the system image viewer.
     """
-    config = config or Config()
+    config = config or Config.load()
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
