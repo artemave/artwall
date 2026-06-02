@@ -37,7 +37,9 @@ def compose_command(
         "-pointsize", str(font_size),
         "-fill", "white",
         "-undercolor", "#00000099",
-        "-annotate", "+24+64", f" {text} ",
+        # leading non-breaking space for left padding: a regular leading space is
+        # stripped by the SouthEast gravity alignment, so it never padded the box
+        "-annotate", "+24+64", f"\u00a0{text} ",
         path,
     ]
 

@@ -17,7 +17,7 @@ class Commands(unittest.TestCase):
         self.assertIn("-composite", argv)
         self.assertEqual(argv[argv.index("-pointsize") + 1], "30")  # configured font size
         self.assertIn("-annotate", argv)
-        self.assertIn(" Monet — Water Lilies 1916 ", argv)
+        self.assertIn("\u00a0Monet — Water Lilies 1916 ", argv)  # nbsp left pad
 
     def test_wallpaper_command(self):
         self.assertEqual(
