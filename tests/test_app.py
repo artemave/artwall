@@ -423,6 +423,27 @@ class ThrottleTests(unittest.TestCase):
         self.assertTrue((self.cache_dir / "current-DP-1.jpg").exists())
         self.assertLess(time.time() - stamp.stat().st_mtime, 60)  # stamp refreshed
 
+    def test_min_interval_override_shortens_the_throttle(self):
+        stamp = self.cache_dir / "last_change"
+        stamp.touch()
+        ten_seconds_ago = time.time() - 10
+        os.utime(stamp, (ten_seconds_ago, ten_seconds_ago))
+
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),  # default 30-min interval would skip
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+                throttle=True,
+                min_interval=5,  # but the change was 10s ago > 5s, so it runs
+            )
+
+        self.assertEqual(len(shown), 1)
+
 
 class PaintingIdsTests(unittest.TestCase):
     def setUp(self):

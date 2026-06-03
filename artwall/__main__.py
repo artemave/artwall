@@ -14,9 +14,17 @@ def main(argv: list[str] | None = None) -> None:
         "--throttle",
         action="store_true",
         help="Skip the change if the previous one happened less than the configured "
-        "interval ago (Config.min_interval). Use this when triggering from frequent "
-        "Sway events (e.g. window focus) so the wallpaper rotates at most that often "
-        "instead of on every event.",
+        "interval ago (Config.min_interval, or --min-interval). Use this when triggering "
+        "from frequent Sway events (e.g. window focus) so the wallpaper rotates at most "
+        "that often instead of on every event.",
+    )
+    parser.add_argument(
+        "--min-interval",
+        type=float,
+        metavar="SECONDS",
+        help="Override Config.min_interval for --throttle. Use a small value (e.g. 5) on "
+        "the output-event subscription to coalesce the burst of events a single monitor "
+        "hotplug fires, while window events keep the long interval.",
     )
     parser.add_argument(
         "--preview",
@@ -38,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.preview:
         preview()
     else:
-        run(throttle=args.throttle)
+        run(throttle=args.throttle, min_interval=args.min_interval)
 
 
 if __name__ == "__main__":

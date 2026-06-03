@@ -223,14 +223,16 @@ def run(
     get_outputs: Callable[[], list[Output]] = sway_outputs,
     get_font: Callable[[], tuple[str, int]] = system_font,
     throttle: bool = False,
+    min_interval: float | None = None,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
 
     With `throttle`, do nothing if the last change was more recent than
-    `config.min_interval` — so this can be triggered from frequent Sway events
-    (e.g. window focus) without thrashing the wallpaper. `rng`, `runner`,
-    `get_outputs` and `get_font` are injected so tests can drive run()
-    deterministically — no mocks, no real Sway, no real desktop.
+    `min_interval` seconds (default `config.min_interval`) — so this can be
+    triggered from frequent Sway events without thrashing the wallpaper. A small
+    `min_interval` suits output events (coalesce a hotplug's burst); the long
+    default suits window events. `rng`, `runner`, `get_outputs` and `get_font` are
+    injected so tests can drive run() deterministically — no mocks, no real Sway.
     """
     config = config or Config.load()
     rng = rng or random.Random()
@@ -238,7 +240,8 @@ def run(
         raise ValueError(f"unknown caption_mode: {config.caption_mode!r} (use {CAPTION_MODES})")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    if throttle and cache.fresh(config.stamp, config.min_interval):
+    interval = config.min_interval if min_interval is None else min_interval
+    if throttle and cache.fresh(config.stamp, interval):
         return []
 
     # "text" burns the caption with the system font; "link" composes bare and

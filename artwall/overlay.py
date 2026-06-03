@@ -150,11 +150,23 @@ def main() -> None:
         screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
     )
 
-    captions = {
-        name: Caption(config, monitor, config.caption_file(name), font)
-        for name, (x, y) in sway_output_positions().items()
-        if (monitor := monitor_at(display, x, y)) is not None
-    }
+    captions: dict[str, Caption] = {}
+
+    def rebuild(*_args: object) -> None:
+        """(Re)build one caption surface per output — on startup and on hotplug."""
+        for caption in captions.values():
+            caption.window.destroy()
+        captions.clear()
+        for name, (x, y) in sway_output_positions().items():
+            monitor = monitor_at(display, x, y)
+            if monitor is not None:
+                captions[name] = Caption(config, monitor, config.caption_file(name), font)
+
+    rebuild()
+    # react to monitors being plugged/unplugged (artwall is triggered separately,
+    # by the Sway output-event subscription, to set the new display's wallpaper)
+    display.connect("monitor-added", rebuild)
+    display.connect("monitor-removed", rebuild)
 
     def on_change(
         _monitor: Gio.FileMonitor,

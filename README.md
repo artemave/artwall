@@ -26,13 +26,19 @@ startup and re-roll on window focus (throttled to once every 30 min):
 ```
 exec /path/to/artwall/bin/artwall
 exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle; done
+# re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
+exec swaymsg -t subscribe -m '["output"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done
 # only for the default "link" caption mode — the interactive caption overlay:
 exec /path/to/artwall/bin/artwall-overlay
 ```
 
 `--throttle` makes a frequent trigger a no-op until `Config.min_interval`
 seconds (default 30 min) have passed since the last change, so the wallpaper
-rotates while you're active and pauses while you're away.
+rotates while you're active and pauses while you're away. `--min-interval`
+overrides that interval: the output subscription uses a short 5 s so a single
+hotplug (which fires several output events) re-rolls just once, while window
+events keep the long interval. Any run sets a painting on *every* connected
+display, so a hotplug-triggered run also gives the new screen one.
 
 To drive it by hand, from the checkout:
 

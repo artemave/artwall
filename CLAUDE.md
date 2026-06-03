@@ -41,6 +41,7 @@ make check                              # all checks: lint + typecheck + 100%-co
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
 python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
 python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (event throttle)
+python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coalesce a hotplug's output-event burst)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall.overlay               # the "link"-mode caption overlay (needs PyGObject + gtk-layer-shell)
 ```
@@ -142,10 +143,14 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 ## Deployment notes
 
-No installer and no systemd. The user adds two `exec` lines to their Sway config:
-one to set a wallpaper at startup, and one that subscribes to window events
-and runs artwall per event with `--throttle` (see README) — plus, in `"link"`
-mode, a third (`bin/artwall-overlay`) for the caption overlay daemon. `bin/artwall`
+No installer and no systemd. The user adds `exec` lines to their Sway config: one
+to set a wallpaper at startup; one subscribing to window events that runs artwall
+per event with `--throttle`; one subscribing to output events with `--throttle
+--min-interval 5` so a monitor hotplug re-rolls (the short interval coalesces the
+event burst a single hotplug fires — any run sets every connected display, so the
+new screen gets a wallpaper); and, in `"link"` mode, `bin/artwall-overlay` for the
+caption overlay daemon (which itself rebuilds its surfaces on monitor hotplug via
+`Gdk.Display` `monitor-added`/`monitor-removed`). `bin/artwall`
 and `bin/artwall-overlay` are small shell launchers that set `PYTHONPATH` to the
 repo and exec `python3 -m artwall "$@"` / `python3 -m artwall.overlay`. A failed
 run prints to Sway's stderr and is
