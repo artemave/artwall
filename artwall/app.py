@@ -139,7 +139,16 @@ def _render(
     url = wikidata.image_url(config.commons_url, painting["image"], width)
     web.download(url, image_path)
     caption = selection.caption(painting)
-    command = commands.compose_command(image_path, caption, width, height, config.font_size)
+    command = commands.compose_command(
+        image_path,
+        caption,
+        width,
+        height,
+        config.font_size,
+        config.caption_corner,
+        config.caption_pad_x,
+        config.caption_pad_y,
+    )
     runner(command, check=True)
     return qid
 

@@ -19,6 +19,13 @@ language = "en"
 # Caption point size.
 font_size = 22
 
+# Caption placement: which corner, and the inset from the screen edges in pixels
+# (absolute, so it sits the same fixed distance from the edge on every display).
+# corner is one of top-left / top-right / bottom-left / bottom-right.
+caption_corner = "bottom-right"
+caption_pad_x = 24
+caption_pad_y = 64
+
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).
 min_interval = 1800

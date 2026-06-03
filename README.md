@@ -53,6 +53,9 @@ artists = ["Q296"]         # Claude Monet
 collections = ["Q190804"]  # Rijksmuseum
 language = "en"            # caption / label language
 font_size = 22             # caption point size
+caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
+caption_pad_x = 24         # caption inset from the side edge, in pixels
+caption_pad_y = 64         # caption inset from the top/bottom edge, in pixels
 min_interval = 1800        # --throttle interval, in seconds
 ```
 

@@ -7,9 +7,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Map the user-facing corner names to ImageMagick gravities. A positive annotate
+# offset insets the caption from that corner regardless of which one it is.
+CORNER_GRAVITY = {
+    "top-left": "NorthWest",
+    "top-right": "NorthEast",
+    "bottom-left": "SouthWest",
+    "bottom-right": "SouthEast",
+}
+
 
 def compose_command(
-    image_path: Path, text: str, width: int, height: int, font_size: int = 22
+    image_path: Path,
+    text: str,
+    width: int,
+    height: int,
+    font_size: int = 22,
+    corner: str = "bottom-right",
+    pad_x: int = 24,
+    pad_y: int = 64,
 ) -> list[str]:
     """Lay the painting, fully visible, on a colour-matched gradient, in place.
 
@@ -17,14 +33,16 @@ def compose_command(
     cropped. The background is the painting shrunk to 2x2 — four quadrant-average
     colours — then stretched back up, which interpolates into a soft gradient in
     the artwork's own palette. The painting is then fitted (aspect preserved,
-    letterboxed) and centred over it, and the caption burned into the corner at
-    `font_size` points.
+    letterboxed) and centred over it, and the caption burned into the chosen
+    `corner` at `font_size` points, inset by `pad_x`/`pad_y` pixels (absolute, so
+    it sits the same fixed distance from the edge on every display).
 
     One ImageMagick 7 (`magick`) invocation; it reads `image_path` before writing
     it, so reading and writing the same path is safe.
     """
     path = str(image_path)
     canvas = f"{width}x{height}"
+    gravity = CORNER_GRAVITY[corner]  # unknown corner fails loudly
     return [
         "magick",
         # gradient backfill from the painting's own quadrant colours
@@ -32,14 +50,14 @@ def compose_command(
         # the painting itself, fitted whole inside the canvas
         "(", path, "-resize", canvas, ")",
         "-gravity", "center", "-composite",
-        # caption, bottom-right, legible over anything via the undercolor box
-        "-gravity", "SouthEast",
+        # caption in the chosen corner, legible over anything via the undercolor box
+        "-gravity", gravity,
         "-pointsize", str(font_size),
         "-fill", "white",
         "-undercolor", "#00000099",
-        # leading non-breaking space for left padding: a regular leading space is
-        # stripped by the SouthEast gravity alignment, so it never padded the box
-        "-annotate", "+24+64", f"\u00a0{text} ",
+        # non-breaking spaces pad the box on both sides: a regular edge space is
+        # stripped by the gravity alignment, so it would never pad the box
+        "-annotate", f"+{pad_x}+{pad_y}", f"\u00a0{text}\u00a0",
         path,
     ]
 

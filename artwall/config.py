@@ -52,6 +52,12 @@ class Config:
     genres: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
     font_size: int = 22  # caption point size
+    # caption placement: which corner, and the inset from the screen edges in
+    # pixels (absolute, so it sits the same fixed distance from the edge on every
+    # display). corner is one of top-left/top-right/bottom-left/bottom-right.
+    caption_corner: str = "bottom-right"
+    caption_pad_x: int = 24
+    caption_pad_y: int = 64
     min_interval: float = MIN_INTERVAL
 
     @classmethod

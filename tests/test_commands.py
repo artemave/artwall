@@ -16,8 +16,20 @@ class Commands(unittest.TestCase):
         self.assertIn("2560x1440", argv)  # painting fitted within it
         self.assertIn("-composite", argv)
         self.assertEqual(argv[argv.index("-pointsize") + 1], "30")  # configured font size
-        self.assertIn("-annotate", argv)
-        self.assertIn("\u00a0Monet — Water Lilies 1916 ", argv)  # nbsp left pad
+        self.assertIn("SouthEast", argv)  # default corner -> SouthEast gravity
+        self.assertEqual(argv[argv.index("-annotate") + 1], "+24+64")  # default pixel inset
+        self.assertIn("\u00a0Monet — Water Lilies 1916 ", argv)  # nbsp pad both sides
+
+    def test_compose_command_corner_and_padding(self):
+        argv = commands.compose_command(
+            Path("/tmp/current.jpg"), "x", 1000, 1000, corner="top-left", pad_x=40, pad_y=80
+        )
+        self.assertIn("NorthWest", argv)  # top-left -> NorthWest gravity
+        self.assertEqual(argv[argv.index("-annotate") + 1], "+40+80")  # absolute pixel inset
+
+    def test_compose_command_unknown_corner_fails_loudly(self):
+        with self.assertRaises(KeyError):
+            commands.compose_command(Path("/tmp/x.jpg"), "x", 100, 100, corner="middle")
 
     def test_wallpaper_command(self):
         self.assertEqual(
