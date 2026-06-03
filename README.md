@@ -5,13 +5,17 @@ Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 that has an image (~400k of them, from museums worldwide). Each run picks random
 paintings and sets a **different** one on each connected display. Every painting
 is shown *whole* — never cropped — centered on a soft gradient (sampled from its
-own colours) that fills the margins, with a small caption (artist, title, date)
-in the bottom-right corner. By default it draws from *all* paintings; a small
+own colours) that fills the margins. The caption (artist, title, date) is shown
+by default as an **interactive overlay** with a clickable link to the painting's
+Wikipedia page, or — if you prefer — burned into the corner of the wallpaper (see
+[Caption modes](#caption-modes)). By default it draws from *all* paintings; a small
 TOML file narrows that by date, movement, genre, artist or collection (see
 [Configuration](#configuration)).
 
-Requires Python 3.11+, `swaymsg` (Sway), and ImageMagick 7 (`magick`, for the
-caption).
+Requires Python 3.11+, `swaymsg` (Sway), and ImageMagick 7 (`magick`). The
+default interactive caption overlay additionally needs PyGObject and
+gtk-layer-shell (GTK 3); the burned-in caption mode does not (see
+[Caption modes](#caption-modes)).
 
 ## Usage
 
@@ -22,6 +26,8 @@ startup and re-roll on window focus (throttled to once every 30 min):
 ```
 exec /path/to/artwall/bin/artwall
 exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle; done
+# only for the default "link" caption mode — the interactive caption overlay:
+exec /path/to/artwall/bin/artwall-overlay
 ```
 
 `--throttle` makes a frequent trigger a no-op until `Config.min_interval`
@@ -52,10 +58,11 @@ genres = ["Q191163"]       # landscape art
 artists = ["Q296"]         # Claude Monet
 collections = ["Q190804"]  # Rijksmuseum
 language = "en"            # caption / label language
-font_size = 22             # caption point size
+font_size = 11             # caption point size; omit to use the system font size
 caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
 caption_pad_x = 24         # caption inset from the side edge, in pixels
 caption_pad_y = 64         # caption inset from the top/bottom edge, in pixels
+caption_mode = "link"      # "link" = interactive overlay; "text" = burned into the wallpaper
 min_interval = 1800        # --throttle interval, in seconds
 ```
 
@@ -64,6 +71,25 @@ AND'd (Impressionist *and* a landscape). Copy
 [`config.example.toml`](config.example.toml) as a starting point. A typo'd key
 fails loudly rather than being silently ignored. Changing a filter transparently
 refetches the catalogue (it's cached per filter-set).
+
+### Caption modes
+
+`caption_mode` chooses how the caption is shown:
+
+- **`link`** (default) — an **interactive overlay**: a small, persistent widget
+  (`bin/artwall-overlay`, launched from your Sway config) that shows the caption
+  as a clickable link to the painting's Wikipedia article (falling back to its
+  Wikidata page), and nothing is burned into the wallpaper. Because it's a
+  Wayland layer-shell surface sitting *just above the wallpaper*, it's visible
+  and clickable wherever the desktop is exposed. It needs PyGObject +
+  gtk-layer-shell, and it must be running — add the `exec` line from
+  [Usage](#usage). It updates automatically on each rotation.
+- **`text`** — the caption is **burned into the wallpaper** in the chosen corner
+  using the system font (scaled per display). No overlay, no extra dependencies,
+  nothing to launch — but not clickable.
+
+`--preview` always burns the caption in, regardless of mode, since it's a single
+self-contained image.
 
 ### Choosing filters
 

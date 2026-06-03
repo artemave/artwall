@@ -19,3 +19,7 @@ coverage:
 
 install-dev:
 	python3 -m pip install -r requirements-dev.txt
+	# Type stubs for the optional GTK overlay. Built from source for Gtk3 (the
+	# package defaults to Gtk4) and --no-deps, since PyGObject itself is a system
+	# package (python3-gobject), not something pip should build.
+	PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3 python3 -m pip install --no-deps --no-binary :all: PyGObject-stubs

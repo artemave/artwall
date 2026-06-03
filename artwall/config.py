@@ -51,13 +51,19 @@ class Config:
     movements: list[str] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
-    font_size: int = 22  # caption point size
+    # caption point size; None = use the desktop's system font size (scaled per
+    # display). Set it to override with an explicit point size.
+    font_size: int | None = None
     # caption placement: which corner, and the inset from the screen edges in
     # pixels (absolute, so it sits the same fixed distance from the edge on every
     # display). corner is one of top-left/top-right/bottom-left/bottom-right.
     caption_corner: str = "bottom-right"
     caption_pad_x: int = 24
     caption_pad_y: int = 64
+    # how the caption is shown: "link" = an interactive overlay (a separate
+    # `python3 -m artwall.overlay` process) with a clickable Wikipedia link, and
+    # nothing burned into the wallpaper; "text" = burn the caption in, no overlay.
+    caption_mode: str = "link"
     min_interval: float = MIN_INTERVAL
 
     @classmethod
@@ -93,6 +99,10 @@ class Config:
 
     def output_image(self, name: str) -> Path:
         return self.cache_dir / f"current-{name}.jpg"
+
+    def caption_file(self, name: str) -> Path:
+        """Where `run()` writes a display's caption + link for the overlay to read."""
+        return self.cache_dir / f"caption-{name}.json"
 
     @property
     def stamp(self) -> Path:

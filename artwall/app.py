@@ -14,16 +14,24 @@ from .config import Config
 # before giving up. Hits are rare, so this almost always succeeds first try.
 ATTEMPTS = 10
 
+# Caption presentation: burn text into the wallpaper, or show the link overlay.
+CAPTION_MODES = ("link", "text")
+
 # Preview has no display to target, so render it at a common desktop size.
 PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
 
+# Reference DPI for an unscaled display (the X/CSS convention). A point is 1/72
+# inch, so a point maps to BASE_DPI/72 device pixels before the output's scale.
+BASE_DPI = 96
+
 
 class Output(NamedTuple):
-    """A connected display: its name and its pixel size."""
+    """A connected display: its name, pixel size, and HiDPI scale factor."""
 
     name: str
     width: int
     height: int
+    scale: float = 1.0
 
 
 def painting_ids(config: Config) -> list[int]:
@@ -109,9 +117,9 @@ def search_entities(term: str, config: Config | None = None) -> list[tuple[str, 
 
 
 def parse_outputs(raw: str) -> list[Output]:
-    """Active outputs (name + pixel size) from `swaymsg -t get_outputs -r` JSON."""
+    """Active outputs (name + pixel size + scale) from `swaymsg -t get_outputs -r`."""
     return [
-        Output(o["name"], o["current_mode"]["width"], o["current_mode"]["height"])
+        Output(o["name"], o["current_mode"]["width"], o["current_mode"]["height"], o["scale"])
         for o in json.loads(raw)
         if o["active"]
     ]
@@ -124,6 +132,48 @@ def sway_outputs() -> list[Output]:  # pragma: no cover - needs a live Sway comp
     return parse_outputs(result.stdout)
 
 
+def parse_font_name(name: str) -> tuple[str, int]:
+    """Split a desktop font setting like "Adwaita Sans 11" into (family, point size)."""
+    family, _, size = name.rpartition(" ")
+    return family, int(size)
+
+
+def system_font() -> tuple[str, int]:  # pragma: no cover - reads the live desktop
+    """The desktop's UI font as (file, point size), via gsettings + fontconfig."""
+    name = subprocess.run(
+        ["gsettings", "get", "org.gnome.desktop.interface", "font-name"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().strip("'")
+    family, size = parse_font_name(name)
+    file = subprocess.run(
+        ["fc-match", "-f", "%{file}", family],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return file, size
+
+
+def scaled_pointsize(point_size: int, scale: float) -> int:
+    """A point size as the magick pointsize for a display at `scale` (HiDPI-aware)."""
+    return round(point_size * BASE_DPI * scale / 72)
+
+
+def _sitelink(config: Config, entity_id: str) -> str | None:
+    """The entity's Wikipedia article URL (in `config.language`), or None."""
+    result = _get_entity(config, entity_id, "sitelinks/urls")
+    return wikidata.parse_sitelink(result, entity_id, config.language)
+
+
+def _wiki_url(config: Config, qid: int, creator_qid: str) -> str:
+    """A human-readable link for the painting: its own Wikipedia article if it has
+    one, else its artist's (paintings rarely do, artists usually do), else — as a
+    last resort — its Wikidata page."""
+    return (
+        _sitelink(config, f"Q{qid}")
+        or (creator_qid and _sitelink(config, creator_qid))
+        or wikidata.entity_url(qid)
+    )
+
+
 def _render(
     config: Config,
     rng: random.Random,
@@ -133,24 +183,37 @@ def _render(
     image_path: Path,
     width: int,
     height: int,
-) -> int:
-    """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`."""
+    scale: float,
+    font: str | None,
+    point_size: int,
+    burn_caption: bool,
+) -> tuple[int, str, str]:
+    """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`.
+
+    When `burn_caption`, the caption is drawn in `font` at `point_size`, converted
+    to a pixel size for this display's `scale` so it looks the same physical size
+    on any resolution; otherwise the painting is composed bare and a Wikipedia
+    link is resolved (link-overlay mode). Returns the chosen QID, its caption text,
+    and the link (empty when burning, where it isn't needed).
+    """
     qid, painting = choose(config, ids, rng, exclude)
-    url = wikidata.image_url(config.commons_url, painting["image"], width)
-    web.download(url, image_path)
+    image = wikidata.image_url(config.commons_url, painting["image"], width)
+    web.download(image, image_path)
     caption = selection.caption(painting)
     command = commands.compose_command(
         image_path,
-        caption,
+        caption if burn_caption else None,
         width,
         height,
-        config.font_size,
+        scaled_pointsize(point_size, scale),
         config.caption_corner,
         config.caption_pad_x,
         config.caption_pad_y,
+        font,
     )
     runner(command, check=True)
-    return qid
+    url = "" if burn_caption else _wiki_url(config, qid, painting["creator_qid"])
+    return qid, caption, url
 
 
 def run(
@@ -158,32 +221,47 @@ def run(
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
     get_outputs: Callable[[], list[Output]] = sway_outputs,
+    get_font: Callable[[], tuple[str, int]] = system_font,
     throttle: bool = False,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
 
     With `throttle`, do nothing if the last change was more recent than
     `config.min_interval` — so this can be triggered from frequent Sway events
-    (e.g. window focus) without thrashing the wallpaper. `rng`, `runner` and
-    `get_outputs` are injected so tests can drive run() deterministically — no
-    mocks, no real Sway.
+    (e.g. window focus) without thrashing the wallpaper. `rng`, `runner`,
+    `get_outputs` and `get_font` are injected so tests can drive run()
+    deterministically — no mocks, no real Sway, no real desktop.
     """
     config = config or Config.load()
     rng = rng or random.Random()
+    if config.caption_mode not in CAPTION_MODES:
+        raise ValueError(f"unknown caption_mode: {config.caption_mode!r} (use {CAPTION_MODES})")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     if throttle and cache.fresh(config.stamp, config.min_interval):
         return []
 
+    # "text" burns the caption with the system font; "link" composes bare and
+    # writes the caption + Wikipedia link for the overlay, so it needs no font.
+    burn = config.caption_mode == "text"
+    if burn:
+        font, sys_size = get_font()
+        point_size = config.font_size if config.font_size is not None else sys_size
+    else:
+        font, point_size = None, 0
     ids = painting_ids(config)
 
     shown: list[int] = []
     for output in get_outputs():
         image_path = config.output_image(output.name)
-        shown.append(
-            _render(config, rng, runner, ids, shown, image_path, output.width, output.height)
+        qid, caption, url = _render(
+            config, rng, runner, ids, shown, image_path,
+            output.width, output.height, output.scale, font, point_size, burn,
         )
+        shown.append(qid)
         runner(commands.wallpaper_command(output.name, image_path), check=True)
+        if not burn:
+            cache.save_json(config.caption_file(output.name), {"text": caption, "url": url})
 
     config.stamp.touch()
     return shown
@@ -193,6 +271,7 @@ def preview(
     config: Config | None = None,
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
+    get_font: Callable[[], tuple[str, int]] = system_font,
 ) -> Path:
     """Generate one random captioned painting and open it, changing nothing else.
 
@@ -203,8 +282,15 @@ def preview(
     rng = rng or random.Random()
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Preview is a single self-contained image, so it always burns the caption
+    # in (the overlay only applies to the live wallpaper), regardless of mode.
+    font, sys_size = get_font()
+    point_size = config.font_size if config.font_size is not None else sys_size
     ids = painting_ids(config)
-    _render(config, rng, runner, ids, [], config.preview_image, PREVIEW_WIDTH, PREVIEW_HEIGHT)
+    _render(
+        config, rng, runner, ids, [], config.preview_image,
+        PREVIEW_WIDTH, PREVIEW_HEIGHT, 1.0, font, point_size, True,
+    )
     runner(commands.open_command(config.preview_image), check=True)
 
     return config.preview_image

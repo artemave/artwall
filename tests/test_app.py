@@ -24,13 +24,15 @@ class Recorder:
         self.calls.append((argv, check))
 
 
-def wikidata_router(qids, missing=(), anonymous=()):
+def wikidata_router(qids, missing=(), anonymous=(), no_article=(), artist_article=None):
     """Serve a tiny Wikidata/Commons: WDQS catalogue CSV, Action-API entities, images.
 
     `missing` QIDs come back with no image (as if deleted since the catalogue
-    cached) so the caller re-picks; `anonymous` QIDs have no creator.
+    cached) so the caller re-picks; `anonymous` QIDs have no creator; `no_article`
+    QIDs have no Wikipedia sitelink; `artist_article` (a URL) gives the shared
+    creator a Wikipedia article, so the link can fall back from painting to artist.
     """
-    missing, anonymous = set(missing), set(anonymous)
+    missing, anonymous, no_article = set(missing), set(anonymous), set(no_article)
 
     def entity(num):
         if num in missing:
@@ -40,7 +42,10 @@ def wikidata_router(qids, missing=(), anonymous=()):
             when = {"time": "+1700-00-00T00:00:00Z"}
             claims["P170"] = [{"mainsnak": {"datavalue": {"value": {"id": "Q999"}}}}]
             claims["P571"] = [{"mainsnak": {"datavalue": {"value": when}}}]
-        return {"claims": claims, "labels": {"en": {"value": f"Painting {num}"}}}
+        ent = {"claims": claims, "labels": {"en": {"value": f"Painting {num}"}}}
+        if num not in no_article:
+            ent["sitelinks"] = {"enwiki": {"url": f"https://en.wikipedia.org/wiki/Painting_{num}"}}
+        return ent
 
     def router(path):
         parsed = urllib.parse.urlparse(path)
@@ -51,7 +56,10 @@ def wikidata_router(qids, missing=(), anonymous=()):
         if parsed.path == "/api":  # wbgetentities for a painting or its creator
             eid = params["ids"][0]
             if eid == "Q999":  # the shared creator
-                body = {"entities": {"Q999": {"labels": {"en": {"value": "Tester"}}}}}
+                creator = {"labels": {"en": {"value": "Tester"}}}
+                if artist_article:
+                    creator["sitelinks"] = {"enwiki": {"url": artist_article}}
+                body = {"entities": {"Q999": creator}}
             else:
                 body = {"entities": {eid: entity(int(eid[1:]))}}
             return 200, "application/json", json.dumps(body).encode()
@@ -63,18 +71,26 @@ def wikidata_router(qids, missing=(), anonymous=()):
     return router
 
 
-def config_for(server, cache_dir):
+def config_for(server, cache_dir, caption_mode="text"):
+    # default "text" so the burn-the-caption assertions below stay exercised;
+    # link-mode tests pass caption_mode="link" explicitly.
     return Config(
         cache_dir=cache_dir,
         sparql_url=server.base_url + "/sparql",
         api_url=server.base_url + "/api",
         commons_url=server.base_url + "/img/",
+        caption_mode=caption_mode,
     )
 
 
-def outputs(*names):
+def outputs(*names, scale=1.0):
     """A real get_outputs provider returning fixed displays (each 1920x1080)."""
-    return lambda: [app.Output(name, 1920, 1080) for name in names]
+    return lambda: [app.Output(name, 1920, 1080, scale) for name in names]
+
+
+def fake_font():
+    """A real get_font provider — a fixed (file, point size), no desktop needed."""
+    return ("/fonts/Test.ttf", 11)
 
 
 class RunTests(unittest.TestCase):
@@ -91,6 +107,7 @@ class RunTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1"),
+                get_font=fake_font,
             )
 
         self.assertEqual(len(shown), 1)
@@ -106,6 +123,8 @@ class RunTests(unittest.TestCase):
         self.assertIn("1920x1080!", compose_argv)  # gradient canvas at the display's size
         caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
         self.assertIn(f"Painting {qid}", caption_arg)
+        self.assertEqual(compose_argv[compose_argv.index("-font") + 1], "/fonts/Test.ttf")
+        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "15")  # 11pt @ scale 1
         self.assertEqual(compose_call[1], True)  # check=True: a failed compose fails the run
         self.assertEqual(
             wallpaper_call,
@@ -122,6 +141,7 @@ class RunTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1", "HDMI-A-1"),
+                get_font=fake_font,
             )
 
         self.assertEqual(sorted(shown), [101, 102])  # two distinct paintings
@@ -136,9 +156,9 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
-            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
+            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
             catalogue_hits = sum(1 for p in s.requests if p.startswith("/sparql"))
-            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"))
+            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
             catalogue_hits_after = sum(1 for p in s.requests if p.startswith("/sparql"))
 
         self.assertEqual(catalogue_hits, 1)
@@ -154,6 +174,7 @@ class RunTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=Recorder(),
                 get_outputs=outputs("DP-1"),
+                get_font=fake_font,
             )
 
         self.assertEqual(shown, [102])  # the vanished 101 was skipped
@@ -168,6 +189,7 @@ class RunTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1"),
+                get_font=fake_font,
             )
 
         compose_argv = runner.calls[0][0]
@@ -184,7 +206,98 @@ class RunTests(unittest.TestCase):
                     rng=random.Random(0),
                     runner=Recorder(),
                     get_outputs=outputs("DP-1"),
+                    get_font=fake_font,
                 )
+
+    def test_caption_scales_with_a_hidpi_output(self):
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("eDP-1", scale=2.0),
+                get_font=fake_font,
+            )
+
+        compose_argv = runner.calls[0][0]
+        # system 11pt, doubled on a 2x display -> magick pointsize 29.
+        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "29")
+
+    def test_font_size_config_overrides_the_system_size(self):
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            cfg = config_for(s, self.cache_dir)
+            cfg.font_size = 20  # explicit override beats the system size
+            runner = Recorder()
+            app.run(cfg, random.Random(0), runner, outputs("DP-1"), fake_font)
+
+        compose_argv = runner.calls[0][0]
+        # 20pt at 1x -> magick pointsize 27, regardless of the system's 11pt.
+        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "27")
+
+    def test_link_mode_skips_burn_and_writes_caption_file(self):
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            shown = app.run(
+                config=config_for(s, self.cache_dir, caption_mode="link"),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        qid = shown[0]
+        compose_argv = runner.calls[0][0]
+        self.assertNotIn("-annotate", compose_argv)  # nothing burned into the wallpaper
+        self.assertIn("-composite", compose_argv)  # painting still composed
+        data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
+        self.assertIn(f"Painting {qid}", data["text"])
+        self.assertEqual(data["url"], f"https://en.wikipedia.org/wiki/Painting_{qid}")
+
+    def test_link_mode_uses_artist_article_when_painting_has_none(self):
+        # painting has no article, but its artist does -> link to the artist
+        router = wikidata_router(
+            [101], no_article={101}, artist_article="https://en.wikipedia.org/wiki/Jan_Asselijn"
+        )
+        with serve(router) as s:
+            router.base = s.base_url
+            app.run(
+                config=config_for(s, self.cache_dir, caption_mode="link"),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
+        self.assertEqual(data["url"], "https://en.wikipedia.org/wiki/Jan_Asselijn")
+
+    def test_link_mode_falls_back_to_wikidata_page_when_neither_has_an_article(self):
+        # neither the painting nor its (here, absent) artist has an article
+        router = wikidata_router([101], no_article={101}, anonymous={101})
+        with serve(router) as s:
+            router.base = s.base_url
+            app.run(
+                config=config_for(s, self.cache_dir, caption_mode="link"),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
+        self.assertEqual(data["url"], "https://www.wikidata.org/wiki/Q101")
+
+    def test_unknown_caption_mode_fails_loudly(self):
+        cfg = Config(cache_dir=self.cache_dir, caption_mode="bogus")
+        with self.assertRaises(ValueError):
+            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
 
 
 class PreviewTests(unittest.TestCase):
@@ -200,6 +313,7 @@ class PreviewTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
+                get_font=fake_font,
             )
 
         self.assertEqual(path, self.cache_dir / "preview.jpg")
@@ -232,26 +346,36 @@ class SearchEntities(unittest.TestCase):
 
 
 class ParseOutputs(unittest.TestCase):
-    def test_returns_active_outputs_with_size(self):
+    def test_returns_active_outputs_with_size_and_scale(self):
         raw = json.dumps(
             [
-                {"name": "DP-1", "active": True, "current_mode": {"width": 2560, "height": 1440}},
-                {"name": "HDMI-A-1", "active": True, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
+                {"name": "DP-1", "active": True, "scale": 1.0, "current_mode": {"width": 2560, "height": 1440}},  # noqa: E501
+                {"name": "eDP-1", "active": True, "scale": 2.0, "current_mode": {"width": 3840, "height": 2160}},  # noqa: E501
             ]
         )
         self.assertEqual(
             app.parse_outputs(raw),
-            [app.Output("DP-1", 2560, 1440), app.Output("HDMI-A-1", 1920, 1080)],
+            [app.Output("DP-1", 2560, 1440, 1.0), app.Output("eDP-1", 3840, 2160, 2.0)],
         )
 
     def test_skips_inactive_outputs(self):
         raw = json.dumps(
             [
-                {"name": "DP-1", "active": True, "current_mode": {"width": 1920, "height": 1080}},
-                {"name": "DP-2", "active": False, "current_mode": {"width": 1920, "height": 1080}},
+                {"name": "DP-1", "active": True, "scale": 1.0, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
+                {"name": "DP-2", "active": False, "scale": 1.0, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
             ]
         )
-        self.assertEqual(app.parse_outputs(raw), [app.Output("DP-1", 1920, 1080)])
+        self.assertEqual(app.parse_outputs(raw), [app.Output("DP-1", 1920, 1080, 1.0)])
+
+
+class FontTests(unittest.TestCase):
+    def test_parse_font_name_splits_family_and_size(self):
+        self.assertEqual(app.parse_font_name("Adwaita Sans 11"), ("Adwaita Sans", 11))
+
+    def test_scaled_pointsize_is_scale_aware(self):
+        # 11pt at 96 dpi = ~14.67px on a 1x display, doubled on a 2x display.
+        self.assertEqual(app.scaled_pointsize(11, 1.0), 15)
+        self.assertEqual(app.scaled_pointsize(11, 2.0), 29)
 
 
 class ThrottleTests(unittest.TestCase):
@@ -270,6 +394,7 @@ class ThrottleTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1"),
+                get_font=fake_font,
                 throttle=True,
             )
 
@@ -290,6 +415,7 @@ class ThrottleTests(unittest.TestCase):
                 rng=random.Random(0),
                 runner=Recorder(),
                 get_outputs=outputs("DP-1"),
+                get_font=fake_font,
                 throttle=True,
             )
 

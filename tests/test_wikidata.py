@@ -117,5 +117,28 @@ class ImageUrl(unittest.TestCase):
         self.assertEqual(url, "https://commons/Special:FilePath/Mona%20Lisa.jpg?width=2560")
 
 
+class Sitelink(unittest.TestCase):
+    def _result(self, sitelinks):
+        return {"entities": {"Q42": {"sitelinks": sitelinks}}}
+
+    def test_returns_article_url_for_language(self):
+        result = self._result({"enwiki": {"url": "https://en.wikipedia.org/wiki/Foo"}})
+        self.assertEqual(
+            wikidata.parse_sitelink(result, "Q42", "en"), "https://en.wikipedia.org/wiki/Foo"
+        )
+
+    def test_none_when_no_article_in_language(self):
+        result = self._result({"frwiki": {"url": "https://fr.wikipedia.org/wiki/Foo"}})
+        self.assertIsNone(wikidata.parse_sitelink(result, "Q42", "en"))
+
+    def test_none_when_no_sitelinks_at_all(self):
+        self.assertIsNone(wikidata.parse_sitelink({"entities": {"Q42": {}}}, "Q42", "en"))
+
+
+class EntityUrl(unittest.TestCase):
+    def test_builds_wikidata_page(self):
+        self.assertEqual(wikidata.entity_url(42), "https://www.wikidata.org/wiki/Q42")
+
+
 if __name__ == "__main__":
     unittest.main()

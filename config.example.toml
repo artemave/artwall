@@ -16,8 +16,10 @@ genres = ["Q191163"]               # landscape art
 # Caption / label language (falls back to any language when unavailable).
 language = "en"
 
-# Caption point size.
-font_size = 22
+# Caption point size. Omit to use the desktop's system font size (detected via
+# gsettings/fontconfig), which is scaled per display so it looks the same
+# physical size on HiDPI screens. Set it to override with an explicit point size.
+# font_size = 11
 
 # Caption placement: which corner, and the inset from the screen edges in pixels
 # (absolute, so it sits the same fixed distance from the edge on every display).
@@ -25,6 +27,13 @@ font_size = 22
 caption_corner = "bottom-right"
 caption_pad_x = 24
 caption_pad_y = 64
+
+# How the caption is shown:
+#   "link" (default) — an interactive overlay (run bin/artwall-overlay from your
+#                      Sway config) with a clickable Wikipedia link; nothing is
+#                      burned into the wallpaper. Needs PyGObject + gtk-layer-shell.
+#   "text"           — burn the caption into the wallpaper. No overlay, no extra deps.
+caption_mode = "link"
 
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).

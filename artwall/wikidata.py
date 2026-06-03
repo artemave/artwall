@@ -95,6 +95,19 @@ def label(result: dict[str, Any], entity_id: str, language: str) -> str:
     return str(labels.get(language, {}).get("value", ""))
 
 
+def parse_sitelink(result: dict[str, Any], entity_id: str, language: str) -> str | None:
+    """The `language` Wikipedia article URL for an entity (painting or creator),
+    from a `wbgetentities props=sitelinks/urls` response, or None if it has none."""
+    sitelinks = result["entities"][entity_id].get("sitelinks", {})
+    site = sitelinks.get(f"{language}wiki")
+    return site["url"] if site else None
+
+
+def entity_url(qid: int) -> str:
+    """The (always-present) Wikidata page for a painting — the article fallback."""
+    return f"https://www.wikidata.org/wiki/Q{qid}"
+
+
 def parse_search(result: dict[str, Any]) -> list[tuple[str, str, str]]:
     """(QID, label, description) rows from a wbsearchentities response."""
     return [

@@ -37,7 +37,8 @@ class LoadConfig(unittest.TestCase):
         self.assertIsNone(cfg.date_begin)
         self.assertEqual(cfg.language, "en")
         self.assertEqual(cfg.movements, [])
-        self.assertEqual(cfg.font_size, 22)
+        self.assertIsNone(cfg.font_size)  # default: use the system font size
+        self.assertEqual(cfg.caption_mode, "link")  # default: interactive link overlay
         self.assertEqual(cfg.min_interval, config.MIN_INTERVAL)
 
     def test_overrides_every_knob(self):

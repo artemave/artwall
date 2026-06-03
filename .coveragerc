@@ -3,7 +3,11 @@ branch = True
 source = artwall
 # The entry-point shim just calls run() with real defaults — exercising it means
 # hitting the live API, swaymsg and magick, so it's excluded rather than mocked.
-omit = artwall/__main__.py
+omit =
+    artwall/__main__.py
+    # The interactive caption overlay needs a GTK toolkit + a live display, so it
+    # can't run under the headless test suite; it's a separate optional component.
+    artwall/overlay.py
 
 [report]
 show_missing = True

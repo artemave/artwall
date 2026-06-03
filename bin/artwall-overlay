@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run the interactive caption overlay from this checkout: put the package on the
+# import path and exec the long-lived widget. Used by the `exec` line in the Sway
+# config when caption_mode = "link". Needs PyGObject + gtk-layer-shell.
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec env PYTHONPATH="$root" python3 -m artwall.overlay

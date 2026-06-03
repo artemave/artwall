@@ -27,6 +27,23 @@ class Commands(unittest.TestCase):
         self.assertIn("NorthWest", argv)  # top-left -> NorthWest gravity
         self.assertEqual(argv[argv.index("-annotate") + 1], "+40+80")  # absolute pixel inset
 
+    def test_compose_command_font(self):
+        with_font = commands.compose_command(
+            Path("/tmp/x.jpg"), "x", 100, 100, font="/fonts/Test.ttf"
+        )
+        self.assertEqual(with_font[with_font.index("-font") + 1], "/fonts/Test.ttf")
+        # default: no -font, so magick uses its built-in default
+        without = commands.compose_command(Path("/tmp/x.jpg"), "x", 100, 100)
+        self.assertNotIn("-font", without)
+
+    def test_compose_command_without_caption(self):
+        # link-overlay mode: text=None -> compose the painting with no caption
+        argv = commands.compose_command(Path("/tmp/current.jpg"), None, 1920, 1080)
+        self.assertIn("-composite", argv)  # painting still composed onto the canvas
+        self.assertNotIn("-annotate", argv)  # but no burned caption
+        self.assertNotIn("-undercolor", argv)
+        self.assertEqual(argv[-1], "/tmp/current.jpg")  # still written in place
+
     def test_compose_command_unknown_corner_fails_loudly(self):
         with self.assertRaises(KeyError):
             commands.compose_command(Path("/tmp/x.jpg"), "x", 100, 100, corner="middle")
