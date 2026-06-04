@@ -1,27 +1,30 @@
 # artwall
 
 Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
-[Wikidata](https://www.wikidata.org/) — every painting in the knowledge base
-that has an image (~400k of them, from museums worldwide). Each run picks random
-paintings and sets a **different** one on each connected display. Every painting
-is shown *whole* — never cropped — centered on a soft gradient (sampled from its
-own colours) that fills the margins. The caption (artist, title, date) is shown
-by default as an **interactive overlay** with a clickable link to the painting's
-Wikipedia page, or — if you prefer — burned into the corner of the wallpaper (see
-[Caption modes](#caption-modes)). By default it draws from a curated set of large,
-open-access museums known for clean, frameless scans (so you get the artwork, not
-a photo of a framed painting on a wall); a small TOML file narrows that further by
-date, movement, genre, artist or collection — or opens it up to *all* ~400k
-paintings (see [Configuration](#configuration)).
+[Wikidata](https://www.wikidata.org/). The caption (artist, title, date) is shown
+by default as an interactive overlay with a clickable link to the painting's
+Wikipedia page. By default it draws from a curated set of large,
+open-access museums known for clean, frameless scans.
 
-Requires Python 3.11+, `swaymsg` (Sway), and ImageMagick 7 (`magick`). The
-default interactive caption overlay additionally needs PyGObject and
-gtk-layer-shell (GTK 3); the burned-in caption mode does not (see
-[Caption modes](#caption-modes)).
+## Requirements
+
+- Python 3.11+
+- Sway
+- PyGObject + gtk-layer-shell (GTK 3) - only for the default `interactive` caption overlay
+
+Install the external tools (you already have Sway and Python). PyGObject and GTK 3
+are usually present on a desktop install - the commands list them anyway, so the
+ones you actually tend to be missing are **ImageMagick** and **gtk-layer-shell**:
+
+```bash
+sudo dnf install ImageMagick gtk-layer-shell python3-gobject       # Fedora
+sudo apt install imagemagick gir1.2-gtklayershell-0.1 python3-gi   # Debian/Ubuntu
+sudo pacman -S imagemagick gtk-layer-shell python-gobject          # Arch
+```
 
 ## Usage
 
-Run it from this checkout — there's nothing to install. Add to your Sway config
+Run it from this checkout - there's nothing to install. Add to your Sway config
 (`~/.config/sway/config`), pointing at where you cloned it, to set a wallpaper at
 startup and re-roll on window focus (throttled to once every 30 min):
 
@@ -30,8 +33,8 @@ exec /path/to/artwall/bin/artwall
 exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle; done
 # re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
 exec swaymsg -t subscribe -m '["output"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done
-# only for the default "interactive" caption mode — the interactive caption overlay:
-exec /path/to/artwall/bin/artwall-overlay
+# only for the default "interactive" caption mode - the interactive caption overlay:
+exec_always /path/to/artwall/bin/artwall-overlay
 ```
 
 `--throttle` makes a frequent trigger a no-op until `Config.min_interval`
@@ -77,22 +80,20 @@ min_interval = 1800        # --throttle interval, in seconds
 
 Within a knob the values are OR'd (`Monet or Van Gogh`); across knobs they're
 AND'd (Impressionist *and* a landscape). Copy
-[`config.example.toml`](config.example.toml) as a starting point. A typo'd key
-fails loudly rather than being silently ignored. Changing a filter transparently
+[`config.example.toml`](config.example.toml) as a starting point. Changing a filter transparently
 refetches the catalogue (it's cached per filter-set).
 
 > **Heads-up on the catalogue fetch.** The catalogue comes from the Wikidata
-> Query Service (WDQS), which **rate-limits aggressively** and is occasionally
-> down. So the *first* run after you change a filter can fail or hang for a bit —
+> Query Service (WDQS), which **rate-limits aggressively**. So the *first* run after you change a filter can fail or hang for a bit -
 > especially if you're iterating on filters quickly (each change is a fresh
 > query). This is transient: just run it again in a minute. Once a filter-set's
 > catalogue is cached it isn't queried again for ~30 days, and every per-painting
-> fetch goes to the stable Action API — so day-to-day rotation never touches WDQS.
+> fetch goes to the stable Action API - so day-to-day rotation never touches WDQS.
 
 ### Default collections
 
 By default artwall draws from a curated set of large, open-access museums chosen
-for **clean, frameless scans** — so the wallpaper is the artwork itself, not a
+for **clean, frameless scans** - so the wallpaper is the artwork itself, not a
 photo of a framed painting on a gallery wall: the Rijksmuseum, Nationalmuseum
 (Sweden), SMK (Denmark), National Gallery of Art (Washington), Art Institute of
 Chicago, the Getty, the Cleveland Museum of Art, and the Museum of Fine Arts,
@@ -103,7 +104,7 @@ occasional framed-on-the-wall photo), set `collections = []`. To use *different*
 museums, list their QIDs (find them with `--find`).
 
 The catalogue for the default set ships **pre-fetched** with artwall, so the very
-first run works without touching WDQS at all — handy since it's often rate-limited
+first run works without touching WDQS at all - handy since it's often rate-limited
 right when you log in. (If you change `collections`, that new set is fetched on
 first use, per the note above.) Maintainers regenerate the shipped catalogue with
 `make catalogue` when the default set changes.
@@ -112,18 +113,18 @@ first use, per the note above.) Maintainers regenerate the shipped catalogue wit
 
 `caption_mode` chooses how the caption is shown:
 
-- **`interactive`** (default) — an **interactive overlay**: a small, persistent
+- **`interactive`** (default) - an **interactive overlay**: a small, persistent
   widget (`bin/artwall-overlay`, launched from your Sway config) that shows the
   caption as a clickable link to the painting's Wikipedia article (falling back to
   its Wikidata page), followed by a **refresh button** that re-rolls the wallpaper
   on just that display; nothing is burned into the wallpaper. Because it's a
   Wayland layer-shell surface sitting *just above the wallpaper*, it's visible
   and clickable wherever the desktop is exposed. It needs PyGObject +
-  gtk-layer-shell, and it must be running — add the `exec` line from
+  gtk-layer-shell, and it must be running - add the `exec` line from
   [Usage](#usage). It updates automatically on each rotation.
-- **`text`** — the caption is **burned into the wallpaper** in the chosen corner
+- **`text`** - the caption is **burned into the wallpaper** in the chosen corner
   using the system font (scaled per display). No overlay, no extra dependencies,
-  nothing to launch — but not clickable.
+  nothing to launch - but not clickable.
 
 `--preview` always burns the caption in, regardless of mode, since it's a single
 self-contained image.
@@ -133,26 +134,26 @@ self-contained image.
 The four filters reference Wikidata items by QID. Browse the options on
 Wikipedia, then turn the name you picked into a QID with `--find`:
 
-- **movements** — [list of art movements](https://en.wikipedia.org/wiki/List_of_art_movements)
+- **movements** - [list of art movements](https://en.wikipedia.org/wiki/List_of_art_movements)
   (e.g. [Impressionism](https://en.wikipedia.org/wiki/Impressionism) = `Q40415`)
-- **genres** — open-ended, with no single list page; common ones are
+- **genres** - open-ended, with no single list page; common ones are
   [portrait](https://en.wikipedia.org/wiki/Portrait_painting),
   [landscape](https://en.wikipedia.org/wiki/Landscape_painting) (`Q191163`),
   [still life](https://en.wikipedia.org/wiki/Still_life) (`Q170571`),
   [history painting](https://en.wikipedia.org/wiki/History_painting),
   [genre scenes](https://en.wikipedia.org/wiki/Genre_art), marine, nude,
-  vanitas, … — `--find` any genre name
-- **artists** — any painter ([list of painters](https://en.wikipedia.org/wiki/List_of_painters_by_name),
+  vanitas, … - `--find` any genre name
+- **artists** - any painter ([list of painters](https://en.wikipedia.org/wiki/List_of_painters_by_name),
   e.g. [Claude Monet](https://en.wikipedia.org/wiki/Claude_Monet) = `Q296`)
-- **collections** — any museum ([list of art museums](https://en.wikipedia.org/wiki/List_of_art_museums))
+- **collections** - any museum ([list of art museums](https://en.wikipedia.org/wiki/List_of_art_museums))
 
 Wikipedia pages don't show QIDs, so once you've picked a name, look it up without
 leaving the terminal:
 
 ```console
 $ ./bin/artwall --find impressionism
-Q40415   Impressionism — 19th-century art movement
-Q1475680 impressionism — movement in literature
+Q40415   Impressionism - 19th-century art movement
+Q1475680 impressionism - movement in literature
 ...
 ```
 
@@ -164,7 +165,7 @@ article via **Tools → Wikidata item**.)
 
 Run it with `./bin/artwall` (see [Usage](#usage)); there's nothing to install.
 
-Tests use the standard-library `unittest` runner — no mocks:
+Tests use the standard-library `unittest` runner - no mocks:
 
 ```bash
 python3 -m unittest discover -s tests        # everything
