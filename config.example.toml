@@ -35,11 +35,12 @@ caption_pad_x = 24
 caption_pad_y = 64
 
 # How the caption is shown:
-#   "link" (default) — an interactive overlay (run bin/artwall-overlay from your
-#                      Sway config) with a clickable Wikipedia link; nothing is
-#                      burned into the wallpaper. Needs PyGObject + gtk-layer-shell.
+#   "interactive" (default) — an interactive overlay (run bin/artwall-overlay from
+#                      your Sway config) with a clickable Wikipedia link and a
+#                      refresh button that re-rolls that display; nothing is burned
+#                      into the wallpaper. Needs PyGObject + gtk-layer-shell.
 #   "text"           — burn the caption into the wallpaper. No overlay, no extra deps.
-caption_mode = "link"
+caption_mode = "interactive"
 
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).

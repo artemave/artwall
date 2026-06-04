@@ -81,10 +81,11 @@ class Config:
     caption_corner: str = "bottom-right"
     caption_pad_x: int = 24
     caption_pad_y: int = 64
-    # how the caption is shown: "link" = an interactive overlay (a separate
-    # `python3 -m artwall.overlay` process) with a clickable Wikipedia link, and
-    # nothing burned into the wallpaper; "text" = burn the caption in, no overlay.
-    caption_mode: str = "link"
+    # how the caption is shown: "interactive" = an interactive overlay (a separate
+    # `python3 -m artwall.overlay` process) with a clickable Wikipedia link and a
+    # refresh button, and nothing burned into the wallpaper; "text" = burn the
+    # caption in, no overlay.
+    caption_mode: str = "interactive"
     min_interval: float = MIN_INTERVAL
 
     @classmethod

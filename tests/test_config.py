@@ -39,7 +39,7 @@ class LoadConfig(unittest.TestCase):
         self.assertEqual(cfg.movements, [])
         self.assertEqual(cfg.collections, config.DEFAULT_COLLECTIONS)  # clean-scan museums
         self.assertIsNone(cfg.font_size)  # default: use the system font size
-        self.assertEqual(cfg.caption_mode, "link")  # default: interactive link overlay
+        self.assertEqual(cfg.caption_mode, "interactive")  # default: interactive overlay
         self.assertEqual(cfg.min_interval, config.MIN_INTERVAL)
 
     def test_overrides_every_knob(self):

@@ -10,9 +10,10 @@ image — ~400k) as the **Sway** desktop wallpaper. The painting is composed (vi
 ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); the
 letterbox margins are filled with a soft gradient sampled from the painting's own
 colours. The caption (artist/title/date) is shown one of two ways, set by
-`caption_mode`: `"link"` (default) draws it as an interactive overlay (a separate
-`artwall.overlay` process — see below) with a clickable Wikipedia link, leaving
-the wallpaper caption-free; `"text"` burns it into the corner. The default
+`caption_mode`: `"interactive"` (default) draws it as an interactive overlay (a
+separate `artwall.overlay` process — see below) with a clickable Wikipedia link
+and a refresh button that re-rolls that one display, leaving the wallpaper
+caption-free; `"text"` burns it into the corner. The default
 `collections` is a curated set of clean-scan, open-access museums
 (`DEFAULT_COLLECTIONS` — Rijksmuseum, Cleveland, …) so the wallpaper is the
 artwork, not a framed-on-the-wall photo; its catalogue **ships pre-fetched**
@@ -31,7 +32,7 @@ scaled per display, so it looks the same physical size on HiDPI screens;
 `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
 tools (`swaymsg`, `magick`, `gsettings`, `fc-match`) are fine since we already
-shell out. The one exception is `artwall/overlay.py` (the `"link"`-mode widget),
+shell out. The one exception is `artwall/overlay.py` (the `"interactive"`-mode widget),
 which needs PyGObject + gtk-layer-shell — it's the lone GUI/daemon component and
 is quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs).
 
@@ -49,7 +50,8 @@ python3 -m artwall                       # set the wallpaper once (hits network 
 python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (event throttle)
 python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coalesce a hotplug's output-event burst)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
-python3 -m artwall.overlay               # the "link"-mode caption overlay (needs PyGObject + gtk-layer-shell)
+python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
+python3 -m artwall.overlay               # the "interactive"-mode caption overlay (needs PyGObject + gtk-layer-shell)
 ```
 
 ## Architecture
@@ -91,19 +93,21 @@ it can be tested without network or `swaymsg`.
 - `artwall/selection.py` — **pure** `caption` formatting (artist/title/date).
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + optional caption; `text=None` composes the painting bare, for
-  `"link"` mode) and `swaymsg`.
+  `"interactive"` mode) and `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
-  get_font, throttle)` injects `rng`, `runner`, `get_outputs`, and `get_font`
+  get_font, throttle, only)` injects `rng`, `runner`, `get_outputs`, and `get_font`
   (defaulting to `random`, `subprocess.run`, `sway_outputs`, and `system_font`)
-  so the full flow can be driven deterministically. `search_entities()` backs
-  `--find`. In `"link"` mode it skips the caption burn, resolves the Wikipedia
-  URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
-- `artwall/overlay.py` — the `"link"`-mode interactive caption: a persistent
+  so the full flow can be driven deterministically; `only` restricts the run to a
+  single named output (the overlay's refresh button → `--output`). `search_entities()`
+  backs `--find`. In `"interactive"` mode it skips the caption burn, resolves the
+  Wikipedia URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
+- `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent
   GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched from the
-  Sway config) showing one `BOTTOM`-layer clickable caption per display, matched
-  to GTK monitors **by geometry** (GTK exposes the monitor model, not the Sway
-  connector name) and reloaded via a `Gio.FileMonitor` on the cache dir whenever
-  `run()` rewrites a `caption-<name>.json`. **The lone module that needs a GUI
+  Sway config) showing one `BOTTOM`-layer clickable caption per display — each
+  followed by a refresh button that re-rolls that display (`python3 -m artwall
+  --output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
+  monitor model, not the Sway connector name) and reloaded via a `Gio.FileMonitor`
+  on the cache dir whenever `run()` rewrites a `caption-<name>.json`. **The lone module that needs a GUI
   toolkit + a live display + a long-lived process** — kept out of the stdlib-only
   oneshot, omitted from coverage, but type-checked (GTK3 PyGObject-stubs, built
   via `PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3` in `make install-dev`).
@@ -124,8 +128,8 @@ to `ATTEMPTS` only to skip a QID that has since lost its image), build and
 download a width-capped Commons thumbnail, `magick`-compose it onto an
 `Output`-sized gradient canvas (whole painting; caption burned in only in
 `"text"` mode) at `current-<output>.jpg`, `swaymsg output <name> bg … fill` (a
-1:1 blit, since the canvas is already the display's size); in `"link"` mode also
-write `caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
+1:1 blit, since the canvas is already the display's size); in `"interactive"` mode
+also write `caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
 `config.stamp`. Selection is plain random — no persisted history — but QIDs
 already chosen this run are excluded so each display gets a *different* painting.
 The pick/download/compose step is `_render()` (takes the target width/height and
@@ -160,9 +164,12 @@ to set a wallpaper at startup; one subscribing to window events that runs artwal
 per event with `--throttle`; one subscribing to output events with `--throttle
 --min-interval 5` so a monitor hotplug re-rolls (the short interval coalesces the
 event burst a single hotplug fires — any run sets every connected display, so the
-new screen gets a wallpaper); and, in `"link"` mode, `bin/artwall-overlay` for the
-caption overlay daemon (which itself rebuilds its surfaces on monitor hotplug via
-`Gdk.Display` `monitor-added`/`monitor-removed`). `bin/artwall`
+new screen gets a wallpaper); and, in `"interactive"` mode, `bin/artwall-overlay`
+for the caption overlay daemon (which itself rebuilds its surfaces on monitor
+hotplug via `Gdk.Display` `monitor-added`/`monitor-removed`, and re-rolls a single
+display with `python3 -m artwall --output <name>` from its refresh button — the
+overlay inherits the launcher's `PYTHONPATH`, so a bare `python3 -m artwall`
+resolves the package). `bin/artwall`
 and `bin/artwall-overlay` are small shell launchers that set `PYTHONPATH` to the
 repo and exec `python3 -m artwall "$@"` / `python3 -m artwall.overlay`. A failed
 run prints to Sway's stderr and is
@@ -174,5 +181,5 @@ environment import (`swaymsg` talks to the IPC socket, it does not need
 
 Rotation itself is event-driven and self-throttled via `config.stamp`'s mtime —
 the oneshot never lingers. The one persistent process of ours is the optional
-`artwall.overlay` daemon (`"link"` mode only); in `"text"` mode there is none,
+`artwall.overlay` daemon (`"interactive"` mode only); in `"text"` mode there is none,
 and the only standing process is the stock `swaymsg -t subscribe` pipe.

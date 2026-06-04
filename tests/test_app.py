@@ -73,9 +73,9 @@ def wikidata_router(qids, missing=(), anonymous=(), no_article=(), artist_articl
 
 def config_for(server, cache_dir, caption_mode="text"):
     # default "text" so the burn-the-caption assertions below stay exercised;
-    # link-mode tests pass caption_mode="link" explicitly. catalogue_dir points at
-    # an empty temp path so tests fetch from the loopback server, not the shipped
-    # bundle (the bundle-seed path is exercised by its own test).
+    # interactive-mode tests pass caption_mode="interactive" explicitly. catalogue_dir
+    # points at an empty temp path so tests fetch from the loopback server, not the
+    # shipped bundle (the bundle-seed path is exercised by its own test).
     return Config(
         cache_dir=cache_dir,
         catalogue_dir=cache_dir / "no-bundle",
@@ -242,13 +242,13 @@ class RunTests(unittest.TestCase):
         # 20pt at 1x -> magick pointsize 27, regardless of the system's 11pt.
         self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "27")
 
-    def test_link_mode_skips_burn_and_writes_caption_file(self):
+    def test_interactive_mode_skips_burn_and_writes_caption_file(self):
         router = wikidata_router([101])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
             shown = app.run(
-                config=config_for(s, self.cache_dir, caption_mode="link"),
+                config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=runner,
                 get_outputs=outputs("DP-1"),
@@ -263,7 +263,7 @@ class RunTests(unittest.TestCase):
         self.assertIn(f"Painting {qid}", data["text"])
         self.assertEqual(data["url"], f"https://en.wikipedia.org/wiki/Painting_{qid}")
 
-    def test_link_mode_uses_artist_article_when_painting_has_none(self):
+    def test_interactive_mode_uses_artist_article_when_painting_has_none(self):
         # painting has no article, but its artist does -> link to the artist
         router = wikidata_router(
             [101], no_article={101}, artist_article="https://en.wikipedia.org/wiki/Jan_Asselijn"
@@ -271,7 +271,7 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             app.run(
-                config=config_for(s, self.cache_dir, caption_mode="link"),
+                config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=Recorder(),
                 get_outputs=outputs("DP-1"),
@@ -281,13 +281,13 @@ class RunTests(unittest.TestCase):
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
         self.assertEqual(data["url"], "https://en.wikipedia.org/wiki/Jan_Asselijn")
 
-    def test_link_mode_falls_back_to_wikidata_page_when_neither_has_an_article(self):
+    def test_interactive_mode_falls_back_to_wikidata_page_when_neither_has_an_article(self):
         # neither the painting nor its (here, absent) artist has an article
         router = wikidata_router([101], no_article={101}, anonymous={101})
         with serve(router) as s:
             router.base = s.base_url
             app.run(
-                config=config_for(s, self.cache_dir, caption_mode="link"),
+                config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=Recorder(),
                 get_outputs=outputs("DP-1"),
@@ -296,6 +296,40 @@ class RunTests(unittest.TestCase):
 
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
         self.assertEqual(data["url"], "https://www.wikidata.org/wiki/Q101")
+
+    def test_only_re_rolls_a_single_named_output(self):
+        router = wikidata_router([101, 102])
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1", "HDMI-A-1"),
+                get_font=fake_font,
+                only="HDMI-A-1",
+            )
+
+        self.assertEqual(len(shown), 1)  # only the named display was set
+        wallpaper_calls = [argv for argv, _check in runner.calls if argv[0] == "swaymsg"]
+        self.assertEqual([argv[2] for argv in wallpaper_calls], ["HDMI-A-1"])
+        self.assertTrue((self.cache_dir / "current-HDMI-A-1.jpg").exists())
+        self.assertFalse((self.cache_dir / "current-DP-1.jpg").exists())
+
+    def test_only_with_an_unknown_output_fails_loudly(self):
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            with self.assertRaises(RuntimeError):
+                app.run(
+                    config=config_for(s, self.cache_dir),
+                    rng=random.Random(0),
+                    runner=Recorder(),
+                    get_outputs=outputs("DP-1"),
+                    get_font=fake_font,
+                    only="NOPE-1",
+                )
 
     def test_unknown_caption_mode_fails_loudly(self):
         cfg = Config(cache_dir=self.cache_dir, caption_mode="bogus")

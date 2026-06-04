@@ -39,8 +39,8 @@ def compose_command(
     If `text` is given, it's burned into the chosen `corner` at `font_size` (a
     magick pointsize) in optional `font`, inset by `pad_x`/`pad_y` pixels
     (absolute, so it sits the same fixed distance from the edge on every display).
-    Pass `text=None` to compose the painting with no caption (the link-overlay
-    mode draws the caption itself, as a separate clickable surface).
+    Pass `text=None` to compose the painting with no caption (the interactive
+    overlay draws the caption itself, as a separate clickable surface).
 
     One ImageMagick 7 (`magick`) invocation; it reads `image_path` before writing
     it, so reading and writing the same path is safe.

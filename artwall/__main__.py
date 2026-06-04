@@ -38,6 +38,12 @@ def main(argv: list[str] | None = None) -> None:
         help="Look up Wikidata QIDs for a name (artist, movement, genre, museum) "
         "to drop into the config's filters, then exit.",
     )
+    parser.add_argument(
+        "--output",
+        metavar="NAME",
+        help="Re-roll only the display with this Sway output name, instead of every "
+        "connected display. Used by the interactive overlay's refresh button.",
+    )
     args = parser.parse_args(argv)
 
     if args.find:
@@ -46,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.preview:
         preview()
     else:
-        run(throttle=args.throttle, min_interval=args.min_interval)
+        run(throttle=args.throttle, min_interval=args.min_interval, only=args.output)
 
 
 if __name__ == "__main__":

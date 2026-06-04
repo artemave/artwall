@@ -1,8 +1,9 @@
-"""Interactive caption overlay for `caption_mode = "link"`.
+"""Interactive caption overlay for `caption_mode = "interactive"`.
 
 A small, persistent GTK layer-shell widget — launched once from the Sway config —
 that shows each display's current painting caption as a clickable link (it opens
-the Wikipedia article). It reads the per-output caption files `run()` writes
+the Wikipedia article), followed by a refresh button that re-rolls the wallpaper
+on that one display. It reads the per-output caption files `run()` writes
 (`caption-<output>.json`) and updates whenever they change.
 
 This is the one component that needs a GUI toolkit (PyGObject + gtk-layer-shell)
@@ -16,6 +17,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import gi
@@ -39,6 +41,8 @@ CORNER_EDGES = {
 
 CSS = b"""
 window { background-color: transparent; }
+/* one translucent box shared by the caption text and the refresh button; the
+   white `color` is inherited by the label and the symbolic refresh icon alike. */
 #cap { background-color: rgba(0,0,0,0.6); color: #ffffff; padding: 1px 3px; }
 """
 
@@ -99,25 +103,43 @@ class Caption:
     """One clickable caption surface, pinned to a display, reloaded from its file."""
 
     def __init__(
-        self, config: Config, monitor: Gdk.Monitor, path: Path, font: str
+        self, config: Config, monitor: Gdk.Monitor, name: str, font: str
     ) -> None:
-        self.path = path
+        self.name = name
+        self.path = config.caption_file(name)
         self.font = font
         self.url: str | None = None
 
+        # the caption text — clicking it opens the painting's Wikipedia article
         self.label = Gtk.Label()
-        self.label.set_name("cap")
-        event_box = Gtk.EventBox()
-        event_box.add(self.label)
-        event_box.connect("button-press-event", self._open)
-        event_box.connect("realize", self._set_link_cursor)
+        link = Gtk.EventBox()
+        link.add(self.label)
+        link.connect("button-press-event", self._open)
+        link.connect("realize", self._set_link_cursor)
+
+        # a refresh button — clicking it re-rolls the wallpaper on this display.
+        # Size the icon to the caption's point size (converted to pixels) so it sits
+        # at the same visual height as the text instead of towering over it.
+        icon = Gtk.Image()
+        icon.set_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU)
+        point = int(font.rpartition(" ")[2])
+        icon.set_pixel_size(round(point * 96 / 72))
+        self.refresh = Gtk.EventBox()
+        self.refresh.add(icon)
+        self.refresh.connect("button-press-event", self._reroll)
+        self.refresh.connect("realize", self._set_link_cursor)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.set_name("cap")
+        box.pack_start(link, False, False, 0)
+        box.pack_start(self.refresh, False, False, 0)
 
         self.window = Gtk.Window()
         visual = self.window.get_screen().get_rgba_visual()
         if visual is not None:  # composite the translucent box over the wallpaper
             self.window.set_visual(visual)
         self.window.set_app_paintable(True)
-        self.window.add(event_box)
+        self.window.add(box)
 
         Layer.init_for_window(self.window)
         Layer.set_monitor(self.window, monitor)
@@ -144,6 +166,33 @@ class Caption:
     def _open(self, *_args: object) -> None:
         if self.url:
             subprocess.Popen(["xdg-open", self.url])
+
+    def _set_refresh_enabled(self, enabled: bool) -> None:
+        """Show the refresh button as active or, while a re-roll runs, as disabled:
+        dimmed (our CSS pins the icon white, so `insensitive` alone wouldn't grey it)
+        and with the plain arrow cursor instead of the link pointer."""
+        self.refresh.set_sensitive(enabled)
+        self.refresh.set_opacity(1.0 if enabled else 0.4)
+        window = self.refresh.get_window()
+        if window is not None:
+            cursor = "pointer" if enabled else "default"
+            window.set_cursor(Gdk.Cursor.new_from_name(self.refresh.get_display(), cursor))
+
+    def _reroll(self, *_args: object) -> None:
+        """Set a fresh painting on just this display. Disable the button until the
+        re-roll process finishes — both so a double-click can't stack runs and as
+        progress feedback; the caption text itself reloads when the file rewrites."""
+        self._set_refresh_enabled(False)
+        proc = subprocess.Popen([sys.executable, "-m", "artwall", "--output", self.name])
+        GLib.timeout_add(250, self._reroll_done, proc)
+
+    def _reroll_done(self, proc: subprocess.Popen[bytes]) -> bool:
+        """Poll the re-roll: keep waiting while it runs, re-enable the button once it
+        exits (whether it set the wallpaper or failed, so it never stays stuck)."""
+        if proc.poll() is None:
+            return True  # still running — poll again
+        self._set_refresh_enabled(True)
+        return False  # finished — stop polling
 
     def reload(self) -> None:
         """Re-read the caption file and show it; hide if it isn't there yet."""
@@ -182,7 +231,7 @@ def main() -> None:
         for name, (x, y) in sway_output_positions().items():
             monitor = monitor_at(display, x, y)
             if monitor is not None:
-                captions[name] = Caption(config, monitor, config.caption_file(name), font)
+                captions[name] = Caption(config, monitor, name, font)
 
     rebuild()
     # react to monitors being plugged/unplugged (artwall is triggered separately,

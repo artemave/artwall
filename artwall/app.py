@@ -14,8 +14,8 @@ from .config import Config
 # before giving up. Hits are rare, so this almost always succeeds first try.
 ATTEMPTS = 10
 
-# Caption presentation: burn text into the wallpaper, or show the link overlay.
-CAPTION_MODES = ("link", "text")
+# Caption presentation: burn text into the wallpaper, or show the interactive overlay.
+CAPTION_MODES = ("interactive", "text")
 
 # Preview has no display to target, so render it at a common desktop size.
 PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
@@ -217,8 +217,8 @@ def _render(
     When `burn_caption`, the caption is drawn in `font` at `point_size`, converted
     to a pixel size for this display's `scale` so it looks the same physical size
     on any resolution; otherwise the painting is composed bare and a Wikipedia
-    link is resolved (link-overlay mode). Returns the chosen QID, its caption text,
-    and the link (empty when burning, where it isn't needed).
+    link is resolved (interactive-overlay mode). Returns the chosen QID, its
+    caption text, and the link (empty when burning, where it isn't needed).
     """
     qid, painting = choose(config, ids, rng, exclude)
     image = wikidata.image_url(config.commons_url, painting["image"], width)
@@ -248,6 +248,7 @@ def run(
     get_font: Callable[[], tuple[str, int]] = system_font,
     throttle: bool = False,
     min_interval: float | None = None,
+    only: str | None = None,
 ) -> list[int]:
     """Set a different random captioned painting on each connected display.
 
@@ -255,8 +256,10 @@ def run(
     `min_interval` seconds (default `config.min_interval`) — so this can be
     triggered from frequent Sway events without thrashing the wallpaper. A small
     `min_interval` suits output events (coalesce a hotplug's burst); the long
-    default suits window events. `rng`, `runner`, `get_outputs` and `get_font` are
-    injected so tests can drive run() deterministically — no mocks, no real Sway.
+    default suits window events. `only` restricts the change to the single output
+    of that name (the overlay's refresh button re-rolls just its own display).
+    `rng`, `runner`, `get_outputs` and `get_font` are injected so tests can drive
+    run() deterministically — no mocks, no real Sway.
     """
     config = config or Config.load()
     rng = rng or random.Random()
@@ -268,8 +271,8 @@ def run(
     if throttle and cache.fresh(config.stamp, interval):
         return []
 
-    # "text" burns the caption with the system font; "link" composes bare and
-    # writes the caption + Wikipedia link for the overlay, so it needs no font.
+    # "text" burns the caption with the system font; "interactive" composes bare
+    # and writes the caption + Wikipedia link for the overlay, so it needs no font.
     burn = config.caption_mode == "text"
     if burn:
         font, sys_size = get_font()
@@ -278,8 +281,14 @@ def run(
         font, point_size = None, 0
     ids = painting_ids(config)
 
+    displays = get_outputs()
+    if only is not None:
+        displays = [o for o in displays if o.name == only]
+        if not displays:
+            raise RuntimeError(f"no active output named {only!r}")
+
     shown: list[int] = []
-    for output in get_outputs():
+    for output in displays:
         image_path = config.output_image(output.name)
         qid, caption, url = _render(
             config, rng, runner, ids, shown, image_path,

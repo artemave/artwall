@@ -30,7 +30,7 @@ exec /path/to/artwall/bin/artwall
 exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle; done
 # re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
 exec swaymsg -t subscribe -m '["output"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done
-# only for the default "link" caption mode — the interactive caption overlay:
+# only for the default "interactive" caption mode — the interactive caption overlay:
 exec /path/to/artwall/bin/artwall-overlay
 ```
 
@@ -71,7 +71,7 @@ font_size = 11             # caption point size; omit to use the system font siz
 caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
 caption_pad_x = 24         # caption inset from the side edge, in pixels
 caption_pad_y = 64         # caption inset from the top/bottom edge, in pixels
-caption_mode = "link"      # "link" = interactive overlay; "text" = burned into the wallpaper
+caption_mode = "interactive"  # "interactive" = overlay; "text" = burned into the wallpaper
 min_interval = 1800        # --throttle interval, in seconds
 ```
 
@@ -112,10 +112,11 @@ first use, per the note above.) Maintainers regenerate the shipped catalogue wit
 
 `caption_mode` chooses how the caption is shown:
 
-- **`link`** (default) — an **interactive overlay**: a small, persistent widget
-  (`bin/artwall-overlay`, launched from your Sway config) that shows the caption
-  as a clickable link to the painting's Wikipedia article (falling back to its
-  Wikidata page), and nothing is burned into the wallpaper. Because it's a
+- **`interactive`** (default) — an **interactive overlay**: a small, persistent
+  widget (`bin/artwall-overlay`, launched from your Sway config) that shows the
+  caption as a clickable link to the painting's Wikipedia article (falling back to
+  its Wikidata page), followed by a **refresh button** that re-rolls the wallpaper
+  on just that display; nothing is burned into the wallpaper. Because it's a
   Wayland layer-shell surface sitting *just above the wallpaper*, it's visible
   and clickable wherever the desktop is exposed. It needs PyGObject +
   gtk-layer-shell, and it must be running — add the `exec` line from
