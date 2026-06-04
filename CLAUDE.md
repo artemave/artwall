@@ -13,9 +13,14 @@ colours. The caption (artist/title/date) is shown one of two ways, set by
 `caption_mode`: `"link"` (default) draws it as an interactive overlay (a separate
 `artwall.overlay` process — see below) with a clickable Wikipedia link, leaving
 the wallpaper caption-free; `"text"` burns it into the corner. The default
-is *all* paintings; a TOML file at `~/.config/artwall/config.toml` narrows it via
-a date window + QID filters (`movements`/`genres`/`artists`/`collections`) and
-sets `language`/`font_size`/`caption_mode`. It's a **oneshot** — sets the
+`collections` is a curated set of clean-scan, open-access museums
+(`DEFAULT_COLLECTIONS` — Rijksmuseum, Cleveland, …) so the wallpaper is the
+artwork, not a framed-on-the-wall photo; its catalogue **ships pre-fetched**
+(`artwall/catalogue/`, regenerate with `make catalogue`) so the first run skips
+the rate-limited WDQS. `collections = []` draws from *all* ~400k paintings. A TOML
+file at `~/.config/artwall/config.toml` narrows it via a date window + QID filters
+(`movements`/`genres`/`artists`/`collections`) and sets
+`language`/`font_size`/`caption_mode`. It's a **oneshot** — sets the
 wallpaper once and exits. Rotation is driven by
 Sway events, not a daemon: the Sway config subscribes to window-focus events and
 runs artwall on each, with `--throttle` (using `Config.min_interval`) limiting it
@@ -36,7 +41,8 @@ is quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs)
 python3 -m unittest discover -s tests   # run all tests
 python3 -m unittest tests.test_app      # run one module
 python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper  # one test
-make install-dev                        # dev tooling: ruff, mypy, coverage
+make install-dev                        # dev tooling: ruff, mypy, coverage, GTK3 stubs
+make catalogue                          # regenerate the shipped first-run catalogue (hits WDQS)
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
 python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
@@ -56,14 +62,17 @@ it can be tested without network or `swaymsg`.
   for images), `ids_ttl`, the content knobs
   (`date_begin`/`date_end`, `language`, `artists`/`movements`/`genres`/
   `collections` QID lists, `font_size`, `caption_mode`) and `min_interval`.
+  `collections` defaults to `DEFAULT_COLLECTIONS` (curated clean-scan museums).
   `caption_file(name)` is where `run()` writes a display's caption + link for the
   overlay (`caption-<name>.json`). The field defaults
   are the built-ins; `Config.load(path)` overlays the user's TOML (`config_file()`
   → `$XDG_CONFIG_HOME/artwall/config.toml`), passing keys straight to the
-  constructor so a typo fails loudly. `ids_file(query)` keys the catalogue cache
-  by an md5 of the query, so changing a filter transparently refetches. **This is
-  the test seam:** tests build a `Config` pointing at a temp dir and a local HTTP
-  server. Don't hardcode paths/URLs elsewhere.
+  constructor so a typo fails loudly. `ids_filename(query)` is the md5-of-query
+  catalogue filename (so changing a filter refetches); `ids_file()` is it under
+  `cache_dir`, `bundled_ids_file()` under `catalogue_dir` (the shipped seed). **This
+  is the test seam:** tests build a `Config` pointing at a temp dir and a local HTTP
+  server (and an empty `catalogue_dir`, so they fetch rather than read the bundle).
+  Don't hardcode paths/URLs elsewhere.
 - `artwall/cache.py` — JSON load/save + `fresh()` (mtime-based TTL).
 - `artwall/web.py` — low-level HTTP (`get_json`, `get_text`, `download`) over
   `urllib`, with a Wikimedia-compliant User-Agent and an `accept` arg (WDQS picks
@@ -101,8 +110,11 @@ it can be tested without network or `swaymsg`.
 
 Flow in `run()`: if `throttle` and `config.stamp` was touched more recently than
 `config.min_interval`, return early (the event-driven throttle). Otherwise:
-fetch/cache the catalogue (one SPARQL query → all matching painting QIDs as a CSV
-of bare ints, cached per filter-set under `painting-ids-<hash>.json`) → query the
+fetch/cache the catalogue (`painting_ids()`: a fresh per-filter-set cache wins;
+else on a true first run, seed from the shipped `bundled_ids_file()` if present —
+the default filters ship one, so no WDQS hit; else one SPARQL query → all matching
+painting QIDs as a CSV of bare ints, cached under `painting-ids-<hash>.json`.
+`dump_catalogue()` / `make catalogue` regenerates the shipped seed) → query the
 active outputs (`get_outputs`, default `sway_outputs()` → `swaymsg -t
 get_outputs`; each is an `Output` carrying name + pixel size + HiDPI scale) and
 the system font (`get_font`, default `system_font()`) → for each display,

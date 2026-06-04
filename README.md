@@ -8,9 +8,11 @@ is shown *whole* — never cropped — centered on a soft gradient (sampled from
 own colours) that fills the margins. The caption (artist, title, date) is shown
 by default as an **interactive overlay** with a clickable link to the painting's
 Wikipedia page, or — if you prefer — burned into the corner of the wallpaper (see
-[Caption modes](#caption-modes)). By default it draws from *all* paintings; a small
-TOML file narrows that by date, movement, genre, artist or collection (see
-[Configuration](#configuration)).
+[Caption modes](#caption-modes)). By default it draws from a curated set of large,
+open-access museums known for clean, frameless scans (so you get the artwork, not
+a photo of a framed painting on a wall); a small TOML file narrows that further by
+date, movement, genre, artist or collection — or opens it up to *all* ~400k
+paintings (see [Configuration](#configuration)).
 
 Requires Python 3.11+, `swaymsg` (Sway), and ImageMagick 7 (`magick`). The
 default interactive caption overlay additionally needs PyGObject and
@@ -52,9 +54,10 @@ State lives under `~/.cache/artwall/`; deleting it is a safe full reset.
 
 ## Configuration
 
-Everything works out of the box (all paintings). To narrow it, drop a TOML file
-at `~/.config/artwall/config.toml` (honours `$XDG_CONFIG_HOME`). Every key is
-optional and overrides the built-in default:
+Out of the box it draws from a curated set of clean-scan museums (see
+[Default collections](#default-collections)). To change that, drop a TOML file at
+`~/.config/artwall/config.toml` (honours `$XDG_CONFIG_HOME`). Every key is optional
+and overrides the built-in default:
 
 ```toml
 date_begin = 1850          # inception-year window (negative = BC)
@@ -62,7 +65,7 @@ date_end = 1900
 movements = ["Q40415"]     # Impressionism
 genres = ["Q191163"]       # landscape art
 artists = ["Q296"]         # Claude Monet
-collections = ["Q190804"]  # Rijksmuseum
+collections = ["Q190804"]  # override the default set (or [] for all ~400k paintings)
 language = "en"            # caption / label language
 font_size = 11             # caption point size; omit to use the system font size
 caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
@@ -77,6 +80,33 @@ AND'd (Impressionist *and* a landscape). Copy
 [`config.example.toml`](config.example.toml) as a starting point. A typo'd key
 fails loudly rather than being silently ignored. Changing a filter transparently
 refetches the catalogue (it's cached per filter-set).
+
+> **Heads-up on the catalogue fetch.** The catalogue comes from the Wikidata
+> Query Service (WDQS), which **rate-limits aggressively** and is occasionally
+> down. So the *first* run after you change a filter can fail or hang for a bit —
+> especially if you're iterating on filters quickly (each change is a fresh
+> query). This is transient: just run it again in a minute. Once a filter-set's
+> catalogue is cached it isn't queried again for ~30 days, and every per-painting
+> fetch goes to the stable Action API — so day-to-day rotation never touches WDQS.
+
+### Default collections
+
+By default artwall draws from a curated set of large, open-access museums chosen
+for **clean, frameless scans** — so the wallpaper is the artwork itself, not a
+photo of a framed painting on a gallery wall: the Rijksmuseum, Nationalmuseum
+(Sweden), SMK (Denmark), National Gallery of Art (Washington), Art Institute of
+Chicago, the Getty, the Cleveland Museum of Art, and the Museum of Fine Arts,
+Boston.
+
+To draw from **all ~400k paintings** instead (more variety, but you'll get the
+occasional framed-on-the-wall photo), set `collections = []`. To use *different*
+museums, list their QIDs (find them with `--find`).
+
+The catalogue for the default set ships **pre-fetched** with artwall, so the very
+first run works without touching WDQS at all — handy since it's often rate-limited
+right when you log in. (If you change `collections`, that new set is fetched on
+first use, per the note above.) Maintainers regenerate the shipped catalogue with
+`make catalogue` when the default set changes.
 
 ### Caption modes
 

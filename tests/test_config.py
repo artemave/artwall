@@ -37,6 +37,7 @@ class LoadConfig(unittest.TestCase):
         self.assertIsNone(cfg.date_begin)
         self.assertEqual(cfg.language, "en")
         self.assertEqual(cfg.movements, [])
+        self.assertEqual(cfg.collections, config.DEFAULT_COLLECTIONS)  # clean-scan museums
         self.assertIsNone(cfg.font_size)  # default: use the system font size
         self.assertEqual(cfg.caption_mode, "link")  # default: interactive link overlay
         self.assertEqual(cfg.min_interval, config.MIN_INTERVAL)
@@ -82,7 +83,7 @@ class IdsFile(unittest.TestCase):
 
 class Filters(unittest.TestCase):
     def test_collects_qid_knobs(self):
-        cfg = Config(movements=["Q40415"], genres=["Q191163"])
+        cfg = Config(movements=["Q40415"], genres=["Q191163"], collections=[])
         self.assertEqual(
             cfg.filters,
             {"artists": [], "movements": ["Q40415"], "genres": ["Q191163"], "collections": []},

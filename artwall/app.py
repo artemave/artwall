@@ -41,6 +41,14 @@ def painting_ids(config: Config) -> list[int]:
         cached: list[int] = cache.load_json(cache_file, [])
         return cached
 
+    # First run for this filter-set: seed from the packaged catalogue if we ship
+    # one (the default filters do), so we don't hit the rate-limited WDQS at all.
+    bundled = config.bundled_ids_file(query)
+    if not cache_file.exists() and bundled.exists():
+        seeded: list[int] = cache.load_json(bundled, [])
+        cache.save_json(cache_file, seeded)  # adopt it into the cache; TTL takes over
+        return seeded
+
     csv_text = web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
     ids = wikidata.parse_catalogue(csv_text)
 
@@ -49,6 +57,22 @@ def painting_ids(config: Config) -> list[int]:
 
     cache.save_json(cache_file, ids)
     return ids
+
+
+def dump_catalogue() -> Path:  # pragma: no cover - hits WDQS, writes packaged data
+    """Fetch the default filter-set's catalogue from WDQS and write the packaged
+    seed (`make catalogue`). Run when the default `collections` change."""
+    config = Config()  # built-in defaults, not the user's TOML
+    query = wikidata.catalogue_query(config.filters, config.date_begin, config.date_end)
+    ids = wikidata.parse_catalogue(
+        web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
+    )
+    if not ids:
+        raise RuntimeError("Wikidata returned no paintings for the default filters")
+    dest = config.bundled_ids_file(query)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cache.save_json(dest, ids)
+    return dest
 
 
 def _get_entity(config: Config, entity_id: str, props: str) -> dict[str, Any]:

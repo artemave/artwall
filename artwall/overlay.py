@@ -13,6 +13,8 @@ headless test suite, so it's excluded from coverage.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -39,6 +41,25 @@ CSS = b"""
 window { background-color: transparent; }
 #cap { background-color: rgba(0,0,0,0.6); color: #ffffff; padding: 1px 3px; }
 """
+
+
+def supersede_running_instances() -> None:
+    """Kill any other running overlay so the newest launch wins — no stacked,
+    duplicate caption surfaces, and a relaunch (e.g. after a code change) cleanly
+    replaces a stale instance instead of orphaning it."""
+    me = os.getpid()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            cmdline = (Path("/proc") / entry / "cmdline").read_bytes()
+        except OSError:
+            continue  # the process vanished between listing and reading — fine
+        if b"python" in cmdline and b"artwall.overlay" in cmdline:
+            try:
+                os.kill(int(entry), signal.SIGTERM)
+            except OSError:
+                pass  # already gone
 
 
 def sway_output_positions() -> dict[str, tuple[int, int]]:
@@ -138,6 +159,7 @@ class Caption:
 
 
 def main() -> None:
+    supersede_running_instances()  # last launch wins; never stack duplicates
     config = Config.load()
     display = Gdk.Display.get_default()
     screen = Gdk.Screen.get_default()

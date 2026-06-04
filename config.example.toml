@@ -1,5 +1,5 @@
 # artwall config — copy to ~/.config/artwall/config.toml and edit.
-# Every key is optional; omitted keys keep their built-in default (all paintings).
+# Every key is optional; omitted keys keep their built-in default.
 # Find QIDs with `python3 -m artwall --find <name>` or on wikidata.org.
 
 # Inception-year window (negative = BC). Both optional.
@@ -11,7 +11,13 @@ date_end = 1900
 movements = ["Q40415", "Q166713"]  # Impressionism, Post-Impressionism
 genres = ["Q191163"]               # landscape art
 # artists = ["Q296", "Q5582"]      # Claude Monet, Vincent van Gogh
-# collections = ["Q190804"]        # Rijksmuseum
+
+# Collections to draw from. The default is a curated set of clean-scan museums
+# (Rijksmuseum, Nationalmuseum, SMK, NGA, Art Institute, Getty, Cleveland, MFA
+# Boston). Override with your own QIDs, or set [] to draw from ALL ~400k paintings
+# (more variety, but more framed-on-the-wall photos).
+# collections = ["Q190804"]        # just the Rijksmuseum
+# collections = []                 # all paintings
 
 # Caption / label language (falls back to any language when unavailable).
 language = "en"

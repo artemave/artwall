@@ -7,7 +7,7 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
-from artwall import app
+from artwall import app, wikidata
 from artwall.config import Config
 from tests.server import serve
 
@@ -73,9 +73,12 @@ def wikidata_router(qids, missing=(), anonymous=(), no_article=(), artist_articl
 
 def config_for(server, cache_dir, caption_mode="text"):
     # default "text" so the burn-the-caption assertions below stay exercised;
-    # link-mode tests pass caption_mode="link" explicitly.
+    # link-mode tests pass caption_mode="link" explicitly. catalogue_dir points at
+    # an empty temp path so tests fetch from the loopback server, not the shipped
+    # bundle (the bundle-seed path is exercised by its own test).
     return Config(
         cache_dir=cache_dir,
+        catalogue_dir=cache_dir / "no-bundle",
         sparql_url=server.base_url + "/sparql",
         api_url=server.base_url + "/api",
         commons_url=server.base_url + "/img/",
@@ -457,6 +460,20 @@ class PaintingIdsTests(unittest.TestCase):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             with self.assertRaises(RuntimeError):
                 app.painting_ids(cfg)
+
+    def test_first_run_seeds_from_the_bundled_catalogue(self):
+        # A packaged catalogue for this filter-set means no network on first run.
+        bundle_dir = Path(tempfile.mkdtemp())
+        cfg = Config(cache_dir=self.cache_dir, catalogue_dir=bundle_dir, sparql_url="http://0.0.0.0:1/x")
+        query = wikidata.catalogue_query(cfg.filters, cfg.date_begin, cfg.date_end)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        (bundle_dir / cfg.ids_filename(query)).write_text(json.dumps([201, 202, 203]))
+
+        ids = app.painting_ids(cfg)  # sparql_url is unreachable, so this must not fetch
+
+        self.assertEqual(ids, [201, 202, 203])
+        # adopted into the cache, so the TTL governs subsequent runs
+        self.assertEqual(json.loads(cfg.ids_file(query).read_text()), [201, 202, 203])
 
 
 if __name__ == "__main__":

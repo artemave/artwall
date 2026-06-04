@@ -19,6 +19,26 @@ IDS_TTL = 30 * 24 * 60 * 60  # the painting catalogue rarely changes; refetch mo
 # change happened fewer than this many seconds ago.
 MIN_INTERVAL = 30 * 60
 
+# Default collections to draw from: large, open-access museums known for clean,
+# frameless scans, so the wallpaper is the artwork itself — not a photo of a
+# framed painting on a gallery wall. Set `collections = []` to draw from *all*
+# paintings instead. (Find more QIDs with `--find`.)
+DEFAULT_COLLECTIONS = [
+    "Q190804",  # Rijksmuseum (Amsterdam)
+    "Q842858",  # Nationalmuseum (Sweden)
+    "Q671384",  # Statens Museum for Kunst / SMK (Denmark)
+    "Q214867",  # National Gallery of Art (Washington)
+    "Q239303",  # Art Institute of Chicago
+    "Q731126",  # J. Paul Getty Museum
+    "Q657415",  # Cleveland Museum of Art
+    "Q49133",   # Museum of Fine Arts, Boston
+]
+
+# Pre-fetched catalogue shipped with the package, so the *first* run works without
+# querying the rate-limited WDQS. Keyed by the same hash as the cache; regenerate
+# with `make catalogue` when the default filter-set changes.
+CATALOGUE_DIR = Path(__file__).parent / "catalogue"
+
 
 def config_file() -> Path:
     """User config location, honouring `$XDG_CONFIG_HOME` (default `~/.config`)."""
@@ -38,6 +58,7 @@ class Config:
     """
 
     cache_dir: Path = DEFAULT_CACHE
+    catalogue_dir: Path = CATALOGUE_DIR  # packaged first-run catalogue seed
     sparql_url: str = SPARQL_URL
     api_url: str = API_URL
     commons_url: str = COMMONS_URL
@@ -50,7 +71,7 @@ class Config:
     artists: list[str] = field(default_factory=list)
     movements: list[str] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
-    collections: list[str] = field(default_factory=list)
+    collections: list[str] = field(default_factory=lambda: list(DEFAULT_COLLECTIONS))
     # caption point size; None = use the desktop's system font size (scaled per
     # display). Set it to override with an explicit point size.
     font_size: int | None = None
@@ -88,10 +109,18 @@ class Config:
             "collections": self.collections,
         }
 
-    def ids_file(self, query: str) -> Path:
-        """Catalogue cache path, keyed by the query so changing a filter refetches."""
+    def ids_filename(self, query: str) -> str:
+        """Catalogue filename, keyed by the query so changing a filter refetches."""
         digest = hashlib.md5(query.encode()).hexdigest()[:12]
-        return self.cache_dir / f"painting-ids-{digest}.json"
+        return f"painting-ids-{digest}.json"
+
+    def ids_file(self, query: str) -> Path:
+        """Catalogue cache path (under `cache_dir`)."""
+        return self.cache_dir / self.ids_filename(query)
+
+    def bundled_ids_file(self, query: str) -> Path:
+        """Packaged catalogue path for the same query — the first-run seed."""
+        return self.catalogue_dir / self.ids_filename(query)
 
     @property
     def preview_image(self) -> Path:

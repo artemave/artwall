@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := check
-.PHONY: check lint typecheck test coverage install-dev
+.PHONY: check lint typecheck test coverage install-dev catalogue
 
 # Run every check: lint, typecheck, and tests under 100%-coverage gate.
 check: lint typecheck coverage
@@ -16,6 +16,11 @@ test:
 coverage:
 	python3 -m coverage run -m unittest discover -s tests
 	python3 -m coverage report
+
+# Regenerate the packaged first-run catalogue for the default filter-set (hits
+# WDQS). Run + commit the result whenever DEFAULT_COLLECTIONS changes.
+catalogue:
+	python3 -c "from artwall.app import dump_catalogue; print('wrote', dump_catalogue())"
 
 install-dev:
 	python3 -m pip install -r requirements-dev.txt
