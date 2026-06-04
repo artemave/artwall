@@ -3,8 +3,7 @@
 Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 [Wikidata](https://www.wikidata.org/). The caption (artist, title, date) is shown
 by default as an interactive overlay with a clickable link to the painting's
-Wikipedia page. By default it draws from a curated set of large,
-open-access museums known for clean, frameless scans.
+Wikipedia page.
 
 ## Requirements
 
