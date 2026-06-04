@@ -5,6 +5,12 @@ Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
 by default as an interactive overlay with a clickable link to the painting's
 Wikipedia page.
 
+
+
+https://github.com/user-attachments/assets/90a74c22-1109-452f-bd83-3455000e8e0f
+
+
+
 ## Requirements
 
 - Python 3.11+
