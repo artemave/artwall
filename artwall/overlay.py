@@ -106,6 +106,8 @@ class Caption:
         self, config: Config, monitor: Gdk.Monitor, name: str, font: str
     ) -> None:
         self.name = name
+        self.config = config
+        self.monitor = monitor
         self.path = config.caption_file(name)
         self.font = font
         self.url: str | None = None
@@ -149,14 +151,37 @@ class Caption:
         # measured from the true screen edge, matching the burned-in caption.
         Layer.set_exclusive_zone(self.window, -1)
         vertical, horizontal = CORNER_EDGES[config.caption_corner]
-        scale = monitor.get_scale_factor() or 1
-        # caption_pad_* are device pixels (as for the burned-in caption); layer-shell
-        # margins are logical, so divide by scale to sit the same distance from the edge.
-        for edge, pad in ((vertical, config.caption_pad_y), (horizontal, config.caption_pad_x)):
-            Layer.set_anchor(self.window, edge, True)
-            Layer.set_margin(self.window, edge, round(pad / scale))
+        Layer.set_anchor(self.window, vertical, True)
+        Layer.set_anchor(self.window, horizontal, True)
+        # The scale can change *after* the surface is built — notably on a monitor
+        # hotplug, where Sway applies the output's configured scale only once it's
+        # added, so an early read here would be stale. _apply_margins recomputes for
+        # the current scale; rerun it on every change so the caption can't drift.
+        self._apply_margins()
+        self._scale_handler = monitor.connect("notify::scale-factor", self._on_scale_changed)
 
         self.reload()
+
+    def _apply_margins(self) -> None:
+        """Inset the caption by `caption_pad_*` *device* pixels from its corner.
+        layer-shell margins are logical (the compositor multiplies them by the
+        surface's scale), so divide by the scale to land a fixed device distance."""
+        scale = self.monitor.get_scale_factor() or 1
+        vertical, horizontal = CORNER_EDGES[self.config.caption_corner]
+        for edge, pad in (
+            (vertical, self.config.caption_pad_y),
+            (horizontal, self.config.caption_pad_x),
+        ):
+            Layer.set_margin(self.window, edge, round(pad / scale))
+
+    def _on_scale_changed(self, *_args: object) -> None:
+        self._apply_margins()
+
+    def destroy(self) -> None:
+        """Tear down the surface, first dropping the monitor signal so a late
+        scale change can't fire _apply_margins on a destroyed window."""
+        self.monitor.disconnect(self._scale_handler)
+        self.window.destroy()
 
     def _set_link_cursor(self, widget: Gtk.Widget) -> None:
         window = widget.get_window()
@@ -226,7 +251,7 @@ def main() -> None:
     def rebuild(*_args: object) -> None:
         """(Re)build one caption surface per output — on startup and on hotplug."""
         for caption in captions.values():
-            caption.window.destroy()
+            caption.destroy()
         captions.clear()
         for name, (x, y) in sway_output_positions().items():
             monitor = monitor_at(display, x, y)

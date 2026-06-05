@@ -46,6 +46,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    # --min-interval only tunes the --throttle check; on its own it's a silent
+    # no-op (the throttle branch never runs), so reject the combo loudly.
+    if args.min_interval is not None and not args.throttle:
+        parser.error("--min-interval has no effect without --throttle")
+
     if args.find:
         for qid, label, description in search_entities(args.find):
             print(f"{qid}\t{label} — {description}")
