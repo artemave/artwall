@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import gi
 
@@ -66,16 +67,25 @@ def supersede_running_instances() -> None:
                 pass  # already gone
 
 
-def sway_output_positions() -> dict[str, tuple[int, int]]:
-    """Active Sway outputs as name -> (x, y) logical origin, to match GTK monitors."""
+def sway_outputs_raw() -> list[dict[str, Any]]:
+    """The active Sway outputs (each a parsed `get_outputs` object)."""
     raw = subprocess.run(
         ["swaymsg", "-t", "get_outputs", "-r"], capture_output=True, text=True, check=True
     ).stdout
-    return {
-        o["name"]: (o["rect"]["x"], o["rect"]["y"])
-        for o in json.loads(raw)
-        if o["active"]
-    }
+    return [o for o in json.loads(raw) if o["active"]]
+
+
+def sway_output_positions() -> dict[str, tuple[int, int]]:
+    """Active Sway outputs as name -> (x, y) logical origin, to match GTK monitors."""
+    return {o["name"]: (o["rect"]["x"], o["rect"]["y"]) for o in sway_outputs_raw()}
+
+
+def sway_output_scales() -> dict[str, float]:
+    """Active Sway outputs as name -> scale. Sway is authoritative and immediate;
+    GTK's per-monitor scale can still read 1 for a beat after a hotplug (Sway
+    applies the configured scale only once the output is added), so the margin is
+    recomputed from this rather than cached from an early GTK read."""
+    return {o["name"]: o["scale"] for o in sway_outputs_raw()}
 
 
 def monitor_at(display: Gdk.Display, x: int, y: int) -> Gdk.Monitor | None:
@@ -107,7 +117,6 @@ class Caption:
     ) -> None:
         self.name = name
         self.config = config
-        self.monitor = monitor
         self.path = config.caption_file(name)
         self.font = font
         self.url: str | None = None
@@ -153,35 +162,21 @@ class Caption:
         vertical, horizontal = CORNER_EDGES[config.caption_corner]
         Layer.set_anchor(self.window, vertical, True)
         Layer.set_anchor(self.window, horizontal, True)
-        # The scale can change *after* the surface is built — notably on a monitor
-        # hotplug, where Sway applies the output's configured scale only once it's
-        # added, so an early read here would be stale. _apply_margins recomputes for
-        # the current scale; rerun it on every change so the caption can't drift.
-        self._apply_margins()
-        self._scale_handler = monitor.connect("notify::scale-factor", self._on_scale_changed)
 
-        self.reload()
+        self.reload()  # sets the margins (from Sway's scale) and the caption text
 
-    def _apply_margins(self) -> None:
+    def _apply_margins(self, scale: float) -> None:
         """Inset the caption by `caption_pad_*` *device* pixels from its corner.
         layer-shell margins are logical (the compositor multiplies them by the
-        surface's scale), so divide by the scale to land a fixed device distance."""
-        scale = self.monitor.get_scale_factor() or 1
+        surface's scale), so divide by the scale to land a fixed device distance.
+        Recomputed on every reload rather than cached — a margin baked at the
+        wrong scale right after a hotplug would otherwise leave the caption adrift."""
         vertical, horizontal = CORNER_EDGES[self.config.caption_corner]
         for edge, pad in (
             (vertical, self.config.caption_pad_y),
             (horizontal, self.config.caption_pad_x),
         ):
             Layer.set_margin(self.window, edge, round(pad / scale))
-
-    def _on_scale_changed(self, *_args: object) -> None:
-        self._apply_margins()
-
-    def destroy(self) -> None:
-        """Tear down the surface, first dropping the monitor signal so a late
-        scale change can't fire _apply_margins on a destroyed window."""
-        self.monitor.disconnect(self._scale_handler)
-        self.window.destroy()
 
     def _set_link_cursor(self, widget: Gtk.Widget) -> None:
         window = widget.get_window()
@@ -220,7 +215,14 @@ class Caption:
         return False  # finished — stop polling
 
     def reload(self) -> None:
-        """Re-read the caption file and show it; hide if it isn't there yet."""
+        """Recompute the margins from Sway's current scale, then re-read the caption
+        file and show it (hide if it isn't there yet). Runs at build, on every
+        rotation, and right after a hotplug — the output-event subscription reruns
+        artwall, which rewrites the caption files the directory monitor watches — so
+        a margin baked at a stale post-hotplug scale self-corrects on the next run."""
+        scale = sway_output_scales().get(self.name)
+        if scale:  # absent only if the output vanished mid-reload; keep the old margin
+            self._apply_margins(scale)
         try:
             data = json.loads(self.path.read_text())
         except FileNotFoundError:
@@ -251,7 +253,7 @@ def main() -> None:
     def rebuild(*_args: object) -> None:
         """(Re)build one caption surface per output — on startup and on hotplug."""
         for caption in captions.values():
-            caption.destroy()
+            caption.window.destroy()
         captions.clear()
         for name, (x, y) in sway_output_positions().items():
             monitor = monitor_at(display, x, y)
