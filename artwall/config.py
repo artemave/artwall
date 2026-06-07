@@ -138,3 +138,10 @@ class Config:
     def stamp(self) -> Path:
         """Marker file whose mtime records the last wallpaper change."""
         return self.cache_dir / "last_change"
+
+    @property
+    def lock(self) -> Path:
+        """Lock file serialising runs: window-focus and output events fire
+        independent triggers (and a run's own `swaymsg … bg` emits output events),
+        so without a lock they overlap and rotate several times in a row."""
+        return self.cache_dir / "lock"

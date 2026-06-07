@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import random
@@ -480,6 +481,47 @@ class ThrottleTests(unittest.TestCase):
             )
 
         self.assertEqual(len(shown), 1)
+
+
+class LockTests(unittest.TestCase):
+    def setUp(self):
+        self.cache_dir = Path(tempfile.mkdtemp())
+
+    def test_drops_the_run_while_another_holds_the_lock(self):
+        # Hold the same lock the way a concurrent run would (a real flock, no mock):
+        # a separate open fd is denied by flock just as another process would be, so
+        # run() must see it held and rotate nothing.
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        router = wikidata_router([101, 102])
+        with serve(router) as s:
+            router.base = s.base_url
+            cfg = config_for(s, self.cache_dir)
+            with cfg.lock.open("w") as held:
+                fcntl.flock(held, fcntl.LOCK_EX)  # stand in for the in-progress run
+                runner = Recorder()
+                shown = app.run(
+                    config=cfg,
+                    rng=random.Random(0),
+                    runner=runner,
+                    get_outputs=outputs("DP-1"),
+                    get_font=fake_font,
+                )
+
+        self.assertEqual(shown, [])  # the lock was held, so the trigger was dropped
+        self.assertEqual(runner.calls, [])  # nothing composed or set
+        self.assertFalse((self.cache_dir / "current-DP-1.jpg").exists())
+
+    def test_releases_the_lock_so_the_next_run_proceeds(self):
+        # Back-to-back runs (the common case) must each acquire and release cleanly.
+        router = wikidata_router([101, 102])
+        with serve(router) as s:
+            router.base = s.base_url
+            cfg = config_for(s, self.cache_dir)
+            first = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
+            second = app.run(cfg, random.Random(1), Recorder(), outputs("DP-1"), fake_font)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)  # the second run wasn't blocked by a stale lock
 
 
 class PaintingIdsTests(unittest.TestCase):

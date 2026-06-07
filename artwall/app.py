@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import random
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -240,6 +242,27 @@ def _render(
     return qid, caption, url
 
 
+@contextlib.contextmanager
+def _single_instance(path: Path) -> Iterator[bool]:
+    """Hold an exclusive, non-blocking lock for the duration of a run, so two
+    overlapping triggers can't both rotate. Window-focus and output events fire
+    independently — and a run's own `swaymsg output … bg` calls emit output
+    events — so without this they cascade into several wallpaper changes in a row.
+    Yields True to the one run that acquires the lock; yields False (run nothing)
+    to any trigger that arrives while another run already holds it."""
+    handle = path.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        handle.close()  # closing the descriptor releases the flock
+
+
 def run(
     config: Config | None = None,
     rng: random.Random | None = None,
@@ -267,40 +290,46 @@ def run(
         raise ValueError(f"unknown caption_mode: {config.caption_mode!r} (use {CAPTION_MODES})")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    interval = config.min_interval if min_interval is None else min_interval
-    if throttle and cache.fresh(config.stamp, interval):
-        return []
+    with _single_instance(config.lock) as acquired:
+        # A run already in progress will set every display itself; this overlapping
+        # trigger is redundant, so drop it rather than rotate a second time.
+        if not acquired:
+            return []
 
-    # "text" burns the caption with the system font; "interactive" composes bare
-    # and writes the caption + Wikipedia link for the overlay, so it needs no font.
-    burn = config.caption_mode == "text"
-    if burn:
-        font, sys_size = get_font()
-        point_size = config.font_size if config.font_size is not None else sys_size
-    else:
-        font, point_size = None, 0
-    ids = painting_ids(config)
+        interval = config.min_interval if min_interval is None else min_interval
+        if throttle and cache.fresh(config.stamp, interval):
+            return []
 
-    displays = get_outputs()
-    if only is not None:
-        displays = [o for o in displays if o.name == only]
-        if not displays:
-            raise RuntimeError(f"no active output named {only!r}")
+        # "text" burns the caption with the system font; "interactive" composes bare
+        # and writes the caption + Wikipedia link for the overlay, so it needs no font.
+        burn = config.caption_mode == "text"
+        if burn:
+            font, sys_size = get_font()
+            point_size = config.font_size if config.font_size is not None else sys_size
+        else:
+            font, point_size = None, 0
+        ids = painting_ids(config)
 
-    shown: list[int] = []
-    for output in displays:
-        image_path = config.output_image(output.name)
-        qid, caption, url = _render(
-            config, rng, runner, ids, shown, image_path,
-            output.width, output.height, output.scale, font, point_size, burn,
-        )
-        shown.append(qid)
-        runner(commands.wallpaper_command(output.name, image_path), check=True)
-        if not burn:
-            cache.save_json(config.caption_file(output.name), {"text": caption, "url": url})
+        displays = get_outputs()
+        if only is not None:
+            displays = [o for o in displays if o.name == only]
+            if not displays:
+                raise RuntimeError(f"no active output named {only!r}")
 
-    config.stamp.touch()
-    return shown
+        shown: list[int] = []
+        for output in displays:
+            image_path = config.output_image(output.name)
+            qid, caption, url = _render(
+                config, rng, runner, ids, shown, image_path,
+                output.width, output.height, output.scale, font, point_size, burn,
+            )
+            shown.append(qid)
+            runner(commands.wallpaper_command(output.name, image_path), check=True)
+            if not burn:
+                cache.save_json(config.caption_file(output.name), {"text": caption, "url": url})
+
+        config.stamp.touch()
+        return shown
 
 
 def preview(
