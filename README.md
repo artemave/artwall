@@ -37,12 +37,21 @@ startup and re-roll on window focus (throttled to once every 30 min):
 
 ```
 exec /path/to/artwall/bin/artwall
-exec swaymsg -t subscribe -m '["window"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle; done
+exec 'while :; do swaymsg -t subscribe -m "[\"window\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle; done; sleep 1; done'
 # re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
-exec swaymsg -t subscribe -m '["output"]' | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done
+exec 'while :; do swaymsg -t subscribe -m "[\"output\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done; sleep 1; done'
 # only for the default "interactive" caption mode - the interactive caption overlay:
 exec_always /path/to/artwall/bin/artwall-overlay
 ```
+
+> The subscription lines must be **single-quoted as a whole**. Sway's config
+> parser splits an `exec` line on `;`, so an unquoted `… | while read …; do …; done`
+> is rejected at startup (`Unknown/invalid command 'do'`) and rotation silently
+> never starts. Wrapping the pipeline in `'…'` hands it to one `sh -c` intact (the
+> inner `"[\"window\"]"` is the event-type JSON with its quotes escaped). The
+> `while :; … sleep 1; done` supervisor resubscribes if `swaymsg` ever exits. Note
+> these are `exec`, not `exec_always`, so editing them needs a fresh Sway session
+> to take effect — `swaymsg reload` does not re-run `exec`.
 
 `--throttle` makes a frequent trigger a no-op until `Config.min_interval`
 seconds (default 30 min) have passed since the last change, so the wallpaper
