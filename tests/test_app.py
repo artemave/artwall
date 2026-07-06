@@ -551,6 +551,48 @@ class PaintingIdsTests(unittest.TestCase):
         # adopted into the cache, so the TTL governs subsequent runs
         self.assertEqual(json.loads(cfg.ids_file(query).read_text()), [201, 202, 203])
 
+    def test_falls_back_to_stale_cache_when_wdqs_is_down(self):
+        # WDQS is outage-prone; a stale catalogue must not crash the wallpaper.
+        cfg = Config(cache_dir=self.cache_dir, sparql_url="http://0.0.0.0:1/x")
+        query = wikidata.catalogue_query(cfg.filters, cfg.date_begin, cfg.date_end)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cfg.ids_file(query)
+        cache_file.write_text(json.dumps([301, 302]))
+        stale = time.time() - cfg.ids_ttl - 60  # older than the TTL
+        os.utime(cache_file, (stale, stale))
+
+        ids = app.painting_ids(cfg)  # WDQS unreachable -> reuse the stale cache
+
+        self.assertEqual(ids, [301, 302])
+        # the stale mtime is left untouched, so the next run retries WDQS
+        self.assertLess(cache_file.stat().st_mtime, time.time() - cfg.ids_ttl)
+
+    def test_falls_back_to_bundle_when_wdqs_is_down_and_cache_stale(self):
+        # A stale cache exists (so the first-run bundle-seed path is skipped) but is
+        # empty/unreadable; the packaged bundle is the last resort when WDQS is down.
+        bundle_dir = Path(tempfile.mkdtemp())
+        cfg = Config(cache_dir=self.cache_dir, catalogue_dir=bundle_dir, sparql_url="http://0.0.0.0:1/x")
+        query = wikidata.catalogue_query(cfg.filters, cfg.date_begin, cfg.date_end)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cfg.ids_file(query)
+        cache_file.write_text(json.dumps([]))  # a stale, empty cache
+        stale = time.time() - cfg.ids_ttl - 60
+        os.utime(cache_file, (stale, stale))
+        (bundle_dir / cfg.ids_filename(query)).write_text(json.dumps([401, 402]))
+
+        ids = app.painting_ids(cfg)
+
+        self.assertEqual(ids, [401, 402])
+
+    def test_reraises_when_wdqs_down_and_nothing_cached(self):
+        # No cache and no bundle: there is nothing to fall back to, so it must fail.
+        cfg = Config(cache_dir=self.cache_dir, catalogue_dir=self.cache_dir / "no-bundle",
+                     sparql_url="http://0.0.0.0:1/x")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(OSError):
+            app.painting_ids(cfg)
+
 
 if __name__ == "__main__":
     unittest.main()

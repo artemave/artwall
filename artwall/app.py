@@ -51,7 +51,18 @@ def painting_ids(config: Config) -> list[int]:
         cache.save_json(cache_file, seeded)  # adopt it into the cache; TTL takes over
         return seeded
 
-    csv_text = web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
+    # The cache is stale (or absent with no bundle): refresh the monthly catalogue
+    # from WDQS. WDQS is outage-prone, so if the fetch fails, fall back to whatever
+    # catalogue we already have -- a stale list of ~400k paintings is fine, a
+    # crashed wallpaper is not. The stale cache keeps its old mtime, so the next
+    # run retries WDQS and self-heals once it recovers.
+    try:
+        csv_text = web.get_text(config.sparql_url, {"query": query}, accept="text/csv")
+    except OSError:
+        stale: list[int] = cache.load_json(cache_file, []) or cache.load_json(bundled, [])
+        if stale:
+            return stale
+        raise
     ids = wikidata.parse_catalogue(csv_text)
 
     if not ids:

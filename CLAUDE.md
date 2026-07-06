@@ -117,7 +117,10 @@ Flow in `run()`: if `throttle` and `config.stamp` was touched more recently than
 fetch/cache the catalogue (`painting_ids()`: a fresh per-filter-set cache wins;
 else on a true first run, seed from the shipped `bundled_ids_file()` if present —
 the default filters ship one, so no WDQS hit; else one SPARQL query → all matching
-painting QIDs as a CSV of bare ints, cached under `painting-ids-<hash>.json`.
+painting QIDs as a CSV of bare ints, cached under `painting-ids-<hash>.json`. If
+that WDQS refresh fails (it's outage-prone), fall back to the stale cache — or the
+bundle — rather than crashing; the stale mtime is left untouched so the next run
+retries and self-heals once WDQS recovers.
 `dump_catalogue()` / `make catalogue` regenerates the shipped seed) → query the
 active outputs (`get_outputs`, default `sway_outputs()` → `swaymsg -t
 get_outputs`; each is an `Output` carrying name + pixel size + HiDPI scale) and
