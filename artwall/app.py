@@ -36,6 +36,15 @@ class Output(NamedTuple):
     scale: float = 1.0
 
 
+class Rendered(NamedTuple):
+    """What `_render()` composed: the painting it picked, and its article link
+    (empty when the caption was burned in, where no link is needed)."""
+
+    qid: int
+    painting: dict[str, str]
+    url: str
+
+
 def painting_ids(config: Config) -> list[int]:
     query = wikidata.catalogue_query(config.filters, config.date_begin, config.date_end)
     cache_file = config.ids_file(query)
@@ -224,22 +233,20 @@ def _render(
     font: str | None,
     point_size: int,
     burn_caption: bool,
-) -> tuple[int, str, str]:
+) -> Rendered:
     """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`.
 
     When `burn_caption`, the caption is drawn in `font` at `point_size`, converted
     to a pixel size for this display's `scale` so it looks the same physical size
     on any resolution; otherwise the painting is composed bare and a Wikipedia
-    link is resolved (interactive-overlay mode). Returns the chosen QID, its
-    caption text, and the link (empty when burning, where it isn't needed).
+    link is resolved (interactive-overlay mode).
     """
     qid, painting = choose(config, ids, rng, exclude)
     image = wikidata.image_url(config.commons_url, painting["image"], width)
     web.download(image, image_path)
-    caption = selection.caption(painting)
     command = commands.compose_command(
         image_path,
-        caption if burn_caption else None,
+        selection.caption(painting) if burn_caption else None,
         width,
         height,
         scaled_pointsize(point_size, scale),
@@ -250,7 +257,7 @@ def _render(
     )
     runner(command, check=True)
     url = "" if burn_caption else _wiki_url(config, qid, painting["creator_qid"])
-    return qid, caption, url
+    return Rendered(qid, painting, url)
 
 
 @contextlib.contextmanager
@@ -330,14 +337,19 @@ def run(
         shown: list[int] = []
         for output in displays:
             image_path = config.output_image(output.name)
-            qid, caption, url = _render(
+            rendered = _render(
                 config, rng, runner, ids, shown, image_path,
                 output.width, output.height, output.scale, font, point_size, burn,
             )
-            shown.append(qid)
+            shown.append(rendered.qid)
             runner(commands.wallpaper_command(output.name, image_path), check=True)
             if not burn:
-                cache.save_json(config.caption_file(output.name), {"text": caption, "url": url})
+                # everything the overlay needs to draw the caption, open the article,
+                # and — if you click the star — record it without another lookup.
+                cache.save_json(
+                    config.caption_file(output.name),
+                    selection.record(rendered.qid, rendered.painting, rendered.url),
+                )
 
         config.stamp.touch()
         return shown

@@ -7,6 +7,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CACHE = Path.home() / ".cache" / "artwall"
+# Starred paintings live here, *not* under the cache: wiping `~/.cache/artwall`
+# is documented as a safe reset, and it must not take your stars with it. The
+# whole directory — list, images and the generated gallery, which links to the
+# images by *relative* path — is self-contained, so it can be backed up or
+# copied to another machine and still open in a browser.
+DEFAULT_DATA = Path.home() / ".local" / "share" / "artwall"
+# Subdirectory of `data_dir` holding the starred paintings themselves. Also the
+# `<img src>` prefix in the generated gallery, hence a bare name, not a path.
+STARS_IMAGE_DIR = "images"
+# Where an unstarred painting waits until you empty the trash. Durable, like the
+# gallery itself — a removal is only final once you say so — and dot-prefixed so
+# it stays out of the way of the directory you actually look at.
+STARS_TRASH_DIR = ".trash"
 # WDQS (query service) is only used for the catalogue — it's prone to outages, so
 # keep it off the per-painting hot path. Per-painting data comes from the stable
 # Action API, and images from Commons.
@@ -58,6 +71,7 @@ class Config:
     """
 
     cache_dir: Path = DEFAULT_CACHE
+    data_dir: Path = DEFAULT_DATA  # durable state (the star list), never auto-purged
     catalogue_dir: Path = CATALOGUE_DIR  # packaged first-run catalogue seed
     sparql_url: str = SPARQL_URL
     api_url: str = API_URL
@@ -86,6 +100,9 @@ class Config:
     # refresh button, and nothing burned into the wallpaper; "text" = burn the
     # caption in, no overlay.
     caption_mode: str = "interactive"
+    # Width to archive a starred painting at. Big enough to keep and re-use,
+    # small enough not to pull a Commons original (those run to 100+ MB).
+    stars_image_width: int = 2560
     min_interval: float = MIN_INTERVAL
 
     @classmethod
@@ -133,6 +150,38 @@ class Config:
     def caption_file(self, name: str) -> Path:
         """Where `run()` writes a display's caption + link for the overlay to read."""
         return self.cache_dir / f"caption-{name}.json"
+
+    @property
+    def stars_file(self) -> Path:
+        """The starred paintings, oldest first. Under `data_dir`, so clearing the
+        cache doesn't discard them."""
+        return self.data_dir / "stars.json"
+
+    @property
+    def stars_page(self) -> Path:
+        """The generated gallery. Derived from `stars_file`, but it sits with the
+        images it links to so the directory stays portable."""
+        return self.data_dir / "stars.html"
+
+    def star_image(self, qid: int) -> Path:
+        """The archived painting for a starred QID. Always `.jpg`: Commons renders
+        a JPEG thumbnail for anything it downscales, and browsers sniff the rest."""
+        return self.data_dir / STARS_IMAGE_DIR / f"Q{qid}.jpg"
+
+    @property
+    def trash_dir(self) -> Path:
+        return self.data_dir / STARS_TRASH_DIR
+
+    @property
+    def trash_file(self) -> Path:
+        """The trashed paintings, each with the position it held in `stars_file`.
+        Beside their images, so emptying the trash is one `rmtree`."""
+        return self.trash_dir / "trash.json"
+
+    def trash_image(self, qid: int) -> Path:
+        """Where `star_image(qid)` is parked when unstarred, so restoring returns the
+        exact bytes rather than re-downloading them. Same filesystem, so it's a rename."""
+        return self.trash_dir / f"Q{qid}.jpg"
 
     @property
     def stamp(self) -> Path:

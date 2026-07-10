@@ -2,8 +2,9 @@
 
 A small, persistent GTK layer-shell widget — launched once from the Sway config —
 that shows each display's current painting caption as a clickable link (it opens
-the Wikipedia article), followed by a refresh button that re-rolls the wallpaper
-on that one display. It reads the per-output caption files `run()` writes
+the Wikipedia article), followed by a star button that adds the painting to the
+gallery (`artwall --stars`) and a refresh button that re-rolls the wallpaper on
+that one display. It reads the per-output caption files `run()` writes
 (`caption-<output>.json`) and updates whenever they change.
 
 This is the one component that needs a GUI toolkit (PyGObject + gtk-layer-shell)
@@ -18,6 +19,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,7 @@ gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from gi.repository import GtkLayerShell as Layer  # type: ignore[attr-defined]  # noqa: E402
 
+from . import selection, stars  # noqa: E402
 from .app import parse_font_name  # noqa: E402 - reuse the pure font parsing
 from .config import Config  # noqa: E402
 
@@ -120,6 +123,7 @@ class Caption:
         self.path = config.caption_file(name)
         self.font = font
         self.url: str | None = None
+        self.qid: int | None = None
 
         # the caption text — clicking it opens the painting's Wikipedia article
         self.label = Gtk.Label()
@@ -128,21 +132,28 @@ class Caption:
         link.connect("button-press-event", self._open)
         link.connect("realize", self._set_link_cursor)
 
-        # a refresh button — clicking it re-rolls the wallpaper on this display.
-        # Size the icon to the caption's point size (converted to pixels) so it sits
+        # Icons sized to the caption's point size (converted to pixels) so they sit
         # at the same visual height as the text instead of towering over it.
-        icon = Gtk.Image()
-        icon.set_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU)
-        point = int(font.rpartition(" ")[2])
-        icon.set_pixel_size(round(point * 96 / 72))
-        self.refresh = Gtk.EventBox()
-        self.refresh.add(icon)
-        self.refresh.connect("button-press-event", self._reroll)
-        self.refresh.connect("realize", self._set_link_cursor)
+        self.icon_pixels = round(int(font.rpartition(" ")[2]) * 96 / 72)
+
+        # a star button — clicking it adds this painting to the gallery (or removes it).
+        # The glyph is visually tighter than the refresh arrow, so give it a little
+        # breathing room on both sides rather than letting it crowd its neighbours.
+        self.star_icon = Gtk.Image()
+        self.star = self._button(self.star_icon, self._toggle_star)
+        self.star.set_margin_start(4)
+        self.star.set_margin_end(4)
+
+        # a refresh button — clicking it re-rolls the wallpaper on this display
+        refresh_icon = Gtk.Image()
+        refresh_icon.set_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU)
+        refresh_icon.set_pixel_size(self.icon_pixels)
+        self.refresh = self._button(refresh_icon, self._reroll)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         box.set_name("cap")
         box.pack_start(link, False, False, 0)
+        box.pack_start(self.star, False, False, 0)
         box.pack_start(self.refresh, False, False, 0)
 
         self.window = Gtk.Window()
@@ -178,6 +189,13 @@ class Caption:
         ):
             Layer.set_margin(self.window, edge, round(pad / scale))
 
+    def _button(self, icon: Gtk.Image, on_click: Callable[..., None]) -> Gtk.EventBox:
+        button = Gtk.EventBox()
+        button.add(icon)
+        button.connect("button-press-event", on_click)
+        button.connect("realize", self._set_link_cursor)
+        return button
+
     def _set_link_cursor(self, widget: Gtk.Widget) -> None:
         window = widget.get_window()
         if window is not None:
@@ -187,32 +205,57 @@ class Caption:
         if self.url:
             subprocess.Popen(["xdg-open", self.url])
 
-    def _set_refresh_enabled(self, enabled: bool) -> None:
-        """Show the refresh button as active or, while a re-roll runs, as disabled:
-        dimmed (our CSS pins the icon white, so `insensitive` alone wouldn't grey it)
-        and with the plain arrow cursor instead of the link pointer."""
-        self.refresh.set_sensitive(enabled)
-        self.refresh.set_opacity(1.0 if enabled else 0.4)
-        window = self.refresh.get_window()
+    def _set_enabled(self, button: Gtk.EventBox, enabled: bool) -> None:
+        """Show a button as active or, while its command runs, as disabled: dimmed
+        (our CSS pins the icon white, so `insensitive` alone wouldn't grey it) and
+        with the plain arrow cursor instead of the link pointer."""
+        button.set_sensitive(enabled)
+        button.set_opacity(1.0 if enabled else 0.4)
+        window = button.get_window()
         if window is not None:
             cursor = "pointer" if enabled else "default"
-            window.set_cursor(Gdk.Cursor.new_from_name(self.refresh.get_display(), cursor))
+            window.set_cursor(Gdk.Cursor.new_from_name(button.get_display(), cursor))
+
+    def _spawn(
+        self, args: list[str], button: Gtk.EventBox, done: Callable[[], None]
+    ) -> None:
+        """Run `python3 -m artwall <args>` without blocking the GTK main loop, and
+        disable `button` until it exits — both so a double-click can't stack runs,
+        and as progress feedback. `done` runs whether it succeeded or failed, so the
+        button never stays stuck."""
+        self._set_enabled(button, False)
+        proc = subprocess.Popen([sys.executable, "-m", "artwall", *args])
+
+        def poll() -> bool:
+            if proc.poll() is None:
+                return True  # still running — poll again
+            self._set_enabled(button, True)
+            done()
+            return False  # finished — stop polling
+
+        GLib.timeout_add(250, poll)
 
     def _reroll(self, *_args: object) -> None:
-        """Set a fresh painting on just this display. Disable the button until the
-        re-roll process finishes — both so a double-click can't stack runs and as
-        progress feedback; the caption text itself reloads when the file rewrites."""
-        self._set_refresh_enabled(False)
-        proc = subprocess.Popen([sys.executable, "-m", "artwall", "--output", self.name])
-        GLib.timeout_add(250, self._reroll_done, proc)
+        """Set a fresh painting on just this display. The caption text reloads on its
+        own, when `run()` rewrites the file the directory monitor watches."""
+        self._spawn(["--output", self.name], self.refresh, lambda: None)
 
-    def _reroll_done(self, proc: subprocess.Popen[bytes]) -> bool:
-        """Poll the re-roll: keep waiting while it runs, re-enable the button once it
-        exits (whether it set the wallpaper or failed, so it never stays stuck)."""
-        if proc.poll() is None:
-            return True  # still running — poll again
-        self._set_refresh_enabled(True)
-        return False  # finished — stop polling
+    def _toggle_star(self, *_args: object) -> None:
+        """Add this painting to the gallery, or take it out. Shelled out rather than
+        done inline: starring downloads the full-size image to archive it, which would
+        freeze the overlay. Nothing rewrites the caption file, so refresh the icon
+        ourselves once it's done."""
+        self._spawn(["--star", self.name], self.star, self._show_star_state)
+
+    def _show_star_state(self) -> None:
+        """Point the star icon at the truth on disk — filled if this display's
+        painting is in the gallery, hollow if not."""
+        starred = self.qid is not None and stars.is_starred(
+            stars.load(self.config), self.qid
+        )
+        name = "starred-symbolic" if starred else "non-starred-symbolic"
+        self.star_icon.set_from_icon_name(name, Gtk.IconSize.MENU)
+        self.star_icon.set_pixel_size(self.icon_pixels)
 
     def reload(self) -> None:
         """Recompute the margins from Sway's current scale, then re-read the caption
@@ -229,8 +272,10 @@ class Caption:
             self.window.hide()
             return
         self.url = data["url"]
-        text = GLib.markup_escape_text(data["text"])
+        self.qid = data["qid"]
+        text = GLib.markup_escape_text(selection.caption(data))
         self.label.set_markup(f'<span font_desc="{self.font}">{text}</span>')
+        self._show_star_state()  # a new painting is (almost always) not yet starred
         self.window.show_all()
 
 

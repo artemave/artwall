@@ -11,8 +11,9 @@ ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); th
 letterbox margins are filled with a soft gradient sampled from the painting's own
 colours. The caption (artist/title/date) is shown one of two ways, set by
 `caption_mode`: `"interactive"` (default) draws it as an interactive overlay (a
-separate `artwall.overlay` process — see below) with a clickable Wikipedia link
-and a refresh button that re-rolls that one display, leaving the wallpaper
+separate `artwall.overlay` process — see below) with a clickable Wikipedia link,
+a ★ button that adds the painting to a **starred gallery**, and a refresh button
+that re-rolls that one display, leaving the wallpaper
 caption-free; `"text"` burns it into the corner. The default
 `collections` is a curated set of clean-scan, open-access museums
 (`DEFAULT_COLLECTIONS` — Rijksmuseum, Cleveland, …) so the wallpaper is the
@@ -51,6 +52,8 @@ python3 -m artwall --throttle            # set once, but no-op if changed < Conf
 python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coalesce a hotplug's output-event burst)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
+python3 -m artwall --star DP-1            # star/unstar that display's painting (the overlay's ★ button)
+python3 -m artwall --stars                # serve the starred gallery on loopback + xdg-open it (Ctrl-C to stop)
 python3 -m artwall.overlay               # the "interactive"-mode caption overlay (needs PyGObject + gtk-layer-shell)
 ```
 
@@ -63,10 +66,18 @@ it can be tested without network or `swaymsg`.
   endpoints (`sparql_url` for WDQS, `api_url` for the Action API, `commons_url`
   for images), `ids_ttl`, the content knobs
   (`date_begin`/`date_end`, `language`, `artists`/`movements`/`genres`/
-  `collections` QID lists, `font_size`, `caption_mode`) and `min_interval`.
+  `collections` QID lists, `font_size`, `caption_mode`, `stars_image_width`) and
+  `min_interval`.
   `collections` defaults to `DEFAULT_COLLECTIONS` (curated clean-scan museums).
-  `caption_file(name)` is where `run()` writes a display's caption + link for the
-  overlay (`caption-<name>.json`). The field defaults
+  `caption_file(name)` is where `run()` writes a display's painting record for the
+  overlay (`caption-<name>.json`). **Two roots on purpose:** `cache_dir`
+  (`~/.cache/artwall`) is disposable — deleting it is a documented safe reset — so
+  the stars live under `data_dir` (`~/.local/share/artwall`) instead:
+  `stars_file` (`stars.json`), `star_image(qid)` (`images/Q<qid>.jpg`) and the
+  generated `stars_page` (`stars.html`), which sits *with* the images rather than
+  in the cache because it links to them by relative path, keeping the directory
+  portable and backup-able; `trash_dir`/`trash_file`/`trash_image(qid)` hold
+  unstarred paintings until the trash is emptied. The field defaults
   are the built-ins; `Config.load(path)` overlays the user's TOML (`config_file()`
   → `$XDG_CONFIG_HOME/artwall/config.toml`), passing keys straight to the
   constructor so a typo fails loudly. `ids_filename(query)` is the md5-of-query
@@ -90,7 +101,51 @@ it can be tested without network or `swaymsg`.
   adding source logic here. **Two services on purpose:** WDQS (`sparql_url`) is outage-prone, so it's
   used *only* for the monthly catalogue; every per-painting fetch goes to the
   stable Action API.
-- `artwall/selection.py` — **pure** `caption` formatting (artist/title/date).
+- `artwall/selection.py` — **pure** `caption` formatting (artist/title/date) and
+  `record()`, the painting dict `run()` writes as `caption-<name>.json` and the
+  overlay copies verbatim into the star list (qid/artist/title/date/image/url —
+  everything needed to caption, link and archive a painting without a refetch).
+- `artwall/stars.py` — the starred gallery, its trash, and the server for both.
+  **Pure** `toggle()`/`is_starred()` (matched on QID), `render_page(stars,
+  interactive, flash, trash_count)` and `render_trash(trashed, flash)` — each one
+  self-contained HTML. `star(output)` reads the caption record, toggles it, and
+  downloads the painting into `star_image(qid)` — writing the archive *before*
+  saving the list, so a failed download never leaves a star pointing at a missing
+  image. `write_page()` writes the archived `stars.html`; `serve_gallery()` backs
+  `--stars`.
+  **Why a server:** the overlay's ★ can only unstar the painting *currently* on a
+  display, so the gallery must be able to remove an older one — and a `file://`
+  page cannot delete a file. So `--stars` renders over a loopback `http.server`
+  (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
+  + 303 — no JavaScript. `_Gallery` answers exactly `/`, `/trash`,
+  `/images/Q<n>.jpg`, `/trash/images/Q<n>.jpg`, `POST /unstar/<n>`,
+  `POST /restore/<n>` and `POST /trash/empty`; everything else 404s. It's a
+  foreground command, not a daemon: `__main__` runs `serve_forever()` until Ctrl-C.
+  `write_page()` still writes the *button-less, trash-link-less* `stars.html` on
+  every mutation — nothing would answer those POSTs once the server exits, and its
+  job is to keep the backed-up directory readable anywhere.
+  **The trash is durable, and unstarring never deletes.** `unstar()` *moves* the
+  image to `trash_image(qid)` (a rename, same filesystem) and appends
+  `{"index", "star"}` to `trash.json` beside it; `restore()` moves it back and
+  reinserts at that index (clamped — the list may have shrunk). So a restore
+  returns the exact bytes, no refetch, whether it happens now or after a reboot.
+  `empty_trash()` is the only destructive call in the module. The overlay's ★ is
+  different: a toggle, so unstarring there just unlinks and re-starring re-downloads.
+  **The undo banner is a Rails-style flash**, not a query parameter: `Session.flash`
+  is set by a mutation and cleared by `take_flash()` on the next page render, so it
+  appears exactly once. A `?removed=<qid>` redirect target (the first attempt) left
+  the qid in the address bar forever and re-offered the undo on every reload. Only
+  `/` and `/trash` consume it — an image fetch must not. Note the test helper must
+  **not** follow the 303: landing on `/` renders, which consumes the flash the
+  assertion is about.
+  **Two CSS traps, both found only in a real browser** (substring assertions can't
+  see either): the flash is a `<div>`, not a `<p>`, because a paragraph can't
+  contain a form — browsers close it early and hoist the button out of the flex
+  row (`test_no_form_is_nested_inside_a_paragraph` guards it). And `figure` must be
+  block, not `inline-block`: an inline-block figure stops Chrome balancing the
+  masonry entirely and stacks every painting into column one. `_grid()` also caps
+  the container to `n` columns' width, because multicol balances to equal heights
+  and would otherwise squeeze three paintings into one column of a wide screen.
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + optional caption; `text=None` composes the painting bare, for
   `"interactive"` mode) and `swaymsg`.
@@ -101,13 +156,19 @@ it can be tested without network or `swaymsg`.
   single named output (the overlay's refresh button → `--output`). `search_entities()`
   backs `--find`. In `"interactive"` mode it skips the caption burn, resolves the
   Wikipedia URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
+  `_render()` returns a `Rendered` NamedTuple (qid + painting dict + url) rather
+  than a widening tuple.
 - `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent
   GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched from the
   Sway config) showing one `BOTTOM`-layer clickable caption per display — each
-  followed by a refresh button that re-rolls that display (`python3 -m artwall
-  --output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
+  followed by a ★ button (`--star <name>`) and a refresh button that re-rolls that
+  display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
   monitor model, not the Sway connector name) and reloaded via a `Gio.FileMonitor`
-  on the cache dir whenever `run()` rewrites a `caption-<name>.json`. **The lone module that needs a GUI
+  on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Both buttons
+  go through `_spawn()`, which `Popen`s `python3 -m artwall …` and polls it on a
+  `GLib.timeout`: starring downloads a full-size image, and doing that inline would
+  freeze the widget. Nothing rewrites the caption file on a star, so `_toggle_star`
+  refreshes its own icon from `stars.json` once the child exits. **The lone module that needs a GUI
   toolkit + a live display + a long-lived process** — kept out of the stdlib-only
   oneshot, omitted from coverage, but type-checked (GTK3 PyGObject-stubs, built
   via `PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3` in `make install-dev`).
@@ -146,7 +207,9 @@ wallpaper untouched.
 parsing+math is split out and tested (`parse_outputs()`, and `parse_font_name()`
 + `scaled_pointsize()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
 omit) — it can't run headless. All state is cached under `~/.cache/artwall/`;
-deleting it is a safe reset.
+deleting it is a safe reset. The one exception is the starred gallery under
+`~/.local/share/artwall/` (`stars.json` + `images/` + `stars.html` + `.trash/`) —
+durable, self-contained and meant to be backed up, which is exactly why it isn't cache.
 
 ## Testing conventions
 
@@ -185,4 +248,7 @@ environment import (`swaymsg` talks to the IPC socket, it does not need
 Rotation itself is event-driven and self-throttled via `config.stamp`'s mtime —
 the oneshot never lingers. The one persistent process of ours is the optional
 `artwall.overlay` daemon (`"interactive"` mode only); in `"text"` mode there is none,
-and the only standing process is the stock `swaymsg -t subscribe` pipe.
+and the only standing process is the stock `swaymsg -t subscribe` pipe. `--stars`
+also runs a loopback HTTP server, but in the foreground, for as long as you keep
+the gallery open — it's a command you Ctrl-C, never something Sway launches. The
+trash outlives it: only the gallery's "Delete forever" button removes a painting.

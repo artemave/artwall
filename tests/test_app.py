@@ -261,7 +261,11 @@ class RunTests(unittest.TestCase):
         self.assertNotIn("-annotate", compose_argv)  # nothing burned into the wallpaper
         self.assertIn("-composite", compose_argv)  # painting still composed
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
-        self.assertIn(f"Painting {qid}", data["text"])
+        self.assertEqual(data["qid"], qid)
+        self.assertEqual(data["title"], f"Painting {qid}")
+        self.assertEqual(data["artist"], "Tester")
+        self.assertEqual(data["date"], "1700")
+        self.assertEqual(data["image"], f"Q{qid}.jpg")  # what the star archiver fetches
         self.assertEqual(data["url"], f"https://en.wikipedia.org/wiki/Painting_{qid}")
 
     def test_interactive_mode_uses_artist_article_when_painting_has_none(self):

@@ -81,5 +81,7 @@ def outputs_command() -> list[str]:
     return ["swaymsg", "-t", "get_outputs", "-r"]
 
 
-def open_command(image_path: Path) -> list[str]:
-    return ["xdg-open", str(image_path)]
+def open_command(target: str | Path) -> list[str]:
+    """Hand a file or URL to the desktop's default handler — the preview image, or
+    the star gallery's loopback URL (which lands in a browser)."""
+    return ["xdg-open", str(target)]

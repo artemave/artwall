@@ -16,5 +16,34 @@ class Caption(unittest.TestCase):
         self.assertEqual(selection.caption(painting), "Monet — Water Lilies")
 
 
+class Record(unittest.TestCase):
+    def test_keeps_what_the_overlay_and_the_gallery_need(self):
+        painting = {
+            "artist": "Monet",
+            "title": "Water Lilies",
+            "date": "1916",
+            "image": "Water Lilies.jpg",
+            "creator_qid": "Q296",  # resolved already; the record has no use for it
+        }
+        self.assertEqual(
+            selection.record(1234, painting, "https://en.wikipedia.org/wiki/Water_Lilies"),
+            {
+                "qid": 1234,
+                "artist": "Monet",
+                "title": "Water Lilies",
+                "date": "1916",
+                "image": "Water Lilies.jpg",
+                "url": "https://en.wikipedia.org/wiki/Water_Lilies",
+            },
+        )
+
+    def test_a_record_captions_itself(self):
+        # the overlay draws the caption straight from the record it reads off disk
+        painting = {"artist": "Monet", "title": "Water Lilies", "date": "1916", "image": "x.jpg"}
+        self.assertEqual(
+            selection.caption(selection.record(1, painting, "")), "Monet — Water Lilies 1916"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
