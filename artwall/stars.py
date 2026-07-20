@@ -33,9 +33,12 @@ from __future__ import annotations
 import functools
 import html
 import http.server
+import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
@@ -50,6 +53,11 @@ Trashed = dict[str, Any]
 
 # Loopback only. The gallery can delete your paintings; it is not for the network.
 HOST = "127.0.0.1"
+
+# How long a previous gallery gets to exit after SIGTERM before we give up on it.
+# It serves in the foreground and catches nothing, so it goes at once in practice.
+TERMINATE_TIMEOUT = 5.0
+TERMINATE_POLL = 0.02
 
 # Masonry geometry, in px — must match `columns`/`column-gap` in CSS, because
 # `_grid()` uses them to cap the container's width (see there for why).
@@ -602,18 +610,73 @@ class GalleryServer(http.server.ThreadingHTTPServer):
         return f"http://{HOST}:{port}/"
 
 
+def _cmdline(pid: int) -> str:
+    """A process's argv, NUL-separated, or "" if it isn't running.
+
+    Read from `/proc` (this is a Sway/Linux tool). Identity, not just liveness:
+    PIDs are recycled, and `stars.pid` can outlive a reboot.
+    """
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_text()
+    except OSError:
+        return ""
+
+
+def is_gallery(cmdline: str) -> bool:
+    """Whether a `/proc` cmdline is an artwall gallery server. Pure."""
+    return "artwall" in cmdline and "--stars" in cmdline
+
+
+def stop_previous(config: Config, timeout: float = TERMINATE_TIMEOUT) -> int | None:
+    """Terminate the gallery server a previous `--stars` left running, if any.
+
+    Running the command again means "show me the gallery", and two servers make
+    that ambiguous: each binds its own port, so the tab you already have open —
+    and the URL you copied — still belong to the *old* one. Worse, a long-lived
+    server keeps the code it started with, so an old process quietly serves
+    stale behaviour long after the source changed. Replacing it is what you meant.
+
+    Returns the PID it stopped, or None if there was nothing to stop.
+    """
+    if not config.stars_pid.exists():
+        return None
+    pid = int(config.stars_pid.read_text())
+    # Not us, and still the process we wrote down — otherwise the file is stale
+    # or its PID has been recycled onto something innocent, and must not be killed.
+    if pid == os.getpid() or not is_gallery(_cmdline(pid)):
+        return None
+
+    # Not guarded against the process exiting between the check above and this
+    # signal: that window is microseconds, and a ProcessLookupError saying so is
+    # more use than a silent branch nothing can test.
+    os.kill(pid, signal.SIGTERM)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not is_gallery(_cmdline(pid)):
+            return pid
+        time.sleep(TERMINATE_POLL)
+    raise RuntimeError(f"the gallery already running as PID {pid} would not exit")
+
+
 def serve_gallery(
     config: Config | None = None,
     runner: Callable[..., object] = subprocess.run,
 ) -> GalleryServer:
-    """Refresh the archived page, then open the live gallery in the browser.
+    """Replace any previous gallery, refresh the archived page, then open this one.
 
     Returns the bound server; the caller runs it (`--stars` serves until you
     interrupt it). It's a command that stays up while you look at it, not a daemon.
     """
     config = config or Config.load()
+    stop_previous(config)
     write_page(config)
     handler = functools.partial(_Gallery, config=config, session=Session())
     server = GalleryServer(config, handler)
+    # After binding, so the PID on file always belongs to a server that got up.
+    # Never removed on exit: a crash or a kill -9 would skip that anyway, so the
+    # cmdline check above is what makes a leftover file harmless.
+    config.stars_pid.parent.mkdir(parents=True, exist_ok=True)
+    config.stars_pid.write_text(str(os.getpid()))
     runner(commands.open_command(server.url), check=True)
     return server

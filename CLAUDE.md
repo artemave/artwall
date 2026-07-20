@@ -162,6 +162,20 @@ it can be tested without network or `swaymsg`.
   link, form-urlencoded) — every other mutation carries its QID in the path. A
   link that won't resolve comes back as a `Flash`, not an error status: it's
   typed input, so a typo must not replace the gallery with a browser error page.
+  **`--stars` replaces a previous `--stars`.** `stop_previous()` SIGTERMs the
+  gallery named in `config.stars_pid` before binding. Not about port contention —
+  each server binds port 0 — but about there being one gallery: a forgotten server
+  keeps answering the tab you already have open, and a long-lived process keeps
+  the code it started with, so it serves stale behaviour after the source changes
+  (this bit for real: an old server kept captioning a painting with a date the
+  fixed code no longer produces). The PID file alone isn't trusted — `is_gallery()`
+  checks the process's `/proc` cmdline for both `artwall` and `--stars`, so a stale
+  file, a recycled PID, the overlay and the `--throttle` oneshots are all safe. The
+  pid file is deliberately *not* removed on exit: a crash or `kill -9` would skip
+  that anyway, which is exactly why the cmdline check is the real guard.
+  **Tests must pass an explicit `cache_dir`** — `serve_gallery()` writes the pid
+  file there and `stop_previous()` signals whatever it names, so a `Config()` left
+  on the default would let the suite kill the developer's own gallery.
   It's a
   foreground command, not a daemon: `__main__` runs `serve_forever()` until Ctrl-C.
   `write_page()` still writes the *button-less, trash-link-less* `stars.html` on

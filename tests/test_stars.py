@@ -1,10 +1,14 @@
 import contextlib
 import dataclasses
 import json
+import os
 import random
 import re
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -293,7 +297,7 @@ class StarTests(unittest.TestCase):
 class WritePage(unittest.TestCase):
     def setUp(self):
         self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
-        self.cfg = Config(data_dir=self.data_dir)
+        self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=self.data_dir)
 
     def test_writes_the_gallery_beside_the_images(self):
         self.cfg.stars_file.parent.mkdir(parents=True, exist_ok=True)
@@ -328,7 +332,9 @@ class ServeGallery(unittest.TestCase):
     def setUp(self):
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
-        self.cfg = Config(data_dir=self.data_dir)
+        # cache_dir too, never the default: serve_gallery() writes stars.pid there
+        # and signals whatever it names — the developer's own gallery, otherwise.
+        self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=self.data_dir)
         self.cfg.star_image(101).parent.mkdir(parents=True, exist_ok=True)
         self.cfg.star_image(101).write_bytes(IMAGE_BYTES)
         self.cfg.star_image(102).write_bytes(IMAGE_BYTES)
@@ -697,9 +703,128 @@ class PasteIntoGallery(unittest.TestCase):
         self.assertIn('action="/star"', page)
 
 
+class StopPrevious(unittest.TestCase):
+    """Driven against real spawned processes — no mocks, no patched os.kill."""
+
+    def setUp(self):
+        self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()))
+        self.cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def spawn(self, argv_tail, trap=False):
+        """A real, live process whose /proc cmdline we control.
+
+        The extra argv after -c lands in sys.argv, so the cmdline can be made to
+        look like a gallery server (or deliberately not like one) while the
+        process is genuinely running.
+
+        A `trap`ping child ignores SIGTERM — but only once it has run, so it
+        writes a ready file first and we wait for it. Signalling before then
+        would hit the default handler and kill the very process meant to survive.
+        """
+        ready = Path(tempfile.mkdtemp()) / "ready"
+        code = (
+            "import signal, sys, time, pathlib; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[-1]).write_text('ok'); "
+            "time.sleep(60)"
+            if trap
+            else "import sys, time, pathlib; "
+            "pathlib.Path(sys.argv[-1]).write_text('ok'); "
+            "time.sleep(60)"
+        )
+        process = subprocess.Popen([sys.executable, "-c", code, *argv_tail, str(ready)])
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                self.fail(f"spawned process exited early ({process.returncode})")
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "spawned process never started")
+        return process
+
+    def write_pid(self, pid):
+        self.cfg.stars_pid.write_text(str(pid))
+
+    def test_no_pid_file_means_nothing_to_stop(self):
+        self.assertIsNone(stars.stop_previous(self.cfg))
+
+    def test_stops_a_running_gallery(self):
+        process = self.spawn(["-m", "artwall", "--stars"])
+        self.write_pid(process.pid)
+
+        self.assertEqual(stars.stop_previous(self.cfg), process.pid)
+        self.assertIsNotNone(process.wait(timeout=5))  # really gone
+
+    def test_a_stale_pid_file_is_harmless(self):
+        process = self.spawn(["-m", "artwall", "--stars"])
+        pid = process.pid
+        process.kill()
+        process.wait()
+        self.write_pid(pid)
+
+        self.assertIsNone(stars.stop_previous(self.cfg))
+
+    def test_a_recycled_pid_is_not_killed(self):
+        # the PID is live, but it belongs to something else entirely now
+        process = self.spawn(["something", "else"])
+        self.write_pid(process.pid)
+
+        self.assertIsNone(stars.stop_previous(self.cfg))
+        self.assertIsNone(process.poll())  # untouched
+
+    def test_our_own_pid_is_never_signalled(self):
+        self.write_pid(os.getpid())
+        self.assertIsNone(stars.stop_previous(self.cfg))
+
+    def test_a_gallery_that_will_not_exit_is_reported(self):
+        process = self.spawn(["-m", "artwall", "--stars"], trap=True)
+        self.write_pid(process.pid)
+
+        with self.assertRaises(RuntimeError) as cm:
+            stars.stop_previous(self.cfg, timeout=0.2)
+        self.assertIn(str(process.pid), str(cm.exception))
+        self.assertIsNone(process.poll())  # still there, still ignoring us
+
+
+class IsGallery(unittest.TestCase):
+    def test_recognises_a_gallery_server(self):
+        self.assertTrue(stars.is_gallery("/usr/bin/python3\0-m\0artwall\0--stars\0"))
+
+    def test_rejects_another_artwall_process(self):
+        # the wallpaper oneshot and the overlay must survive a --stars
+        self.assertFalse(stars.is_gallery("/usr/bin/python3\0-m\0artwall\0--throttle\0"))
+        self.assertFalse(stars.is_gallery("/usr/bin/python3\0-m\0artwall.overlay\0"))
+
+    def test_rejects_an_unrelated_process(self):
+        self.assertFalse(stars.is_gallery("/usr/bin/firefox\0--stars\0"))
+
+    def test_a_dead_process_has_no_cmdline(self):
+        self.assertEqual(stars._cmdline(-1), "")
+
+
+class GalleryPidFile(unittest.TestCase):
+    def test_serving_records_the_pid_and_replaces_a_previous_gallery(self):
+        cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()),
+            data_dir=Path(tempfile.mkdtemp()) / "artwall",
+        )
+        first = stars.serve_gallery(cfg, Recorder())
+        self.addCleanup(first.server_close)
+        self.assertEqual(cfg.stars_pid.read_text(), str(os.getpid()))
+
+        # a second serve in this same process must not signal itself
+        second = stars.serve_gallery(cfg, Recorder())
+        self.addCleanup(second.server_close)
+        self.assertEqual(cfg.stars_pid.read_text(), str(os.getpid()))
+
+
 class TrashFile(unittest.TestCase):
     def setUp(self):
-        self.cfg = Config(data_dir=Path(tempfile.mkdtemp()) / "artwall")
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
+        )
 
     def test_an_absent_trash_reads_as_empty(self):
         self.assertEqual(stars.load_trash(self.cfg), [])

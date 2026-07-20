@@ -94,6 +94,14 @@ in the foreground until you Ctrl-C it, rather than just opening a file — a pag
 loaded from `file://` can't delete anything. It binds `127.0.0.1` on a port the
 OS picks, serves only your archived paintings, and needs no JavaScript.
 
+**Running `--stars` again replaces the gallery, it doesn't add a second one.**
+Each server binds its own port, so a forgotten one keeps answering the tab you
+already have open — and, since a long-lived process keeps the code it started
+with, it can go on serving stale behaviour long after you've changed something.
+The new command stops the old server first (its PID is kept in
+`~/.cache/artwall/stars.pid`, and the process is checked to really be a gallery
+before anything is signalled, so a recycled PID is never touched).
+
 ### Adding a painting you found yourself
 
 The wallpaper only ever offers you one painting at a time, but reading about an

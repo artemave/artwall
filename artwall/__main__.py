@@ -50,7 +50,8 @@ def main(argv: list[str] | None = None) -> None:
         "--stars",
         action="store_true",
         help="Open the gallery of starred paintings in the browser, and serve it "
-        "until interrupted so paintings can be unstarred from the page.",
+        "until interrupted so paintings can be unstarred from the page. Replaces a "
+        "gallery left running by a previous --stars, rather than adding a second one.",
     )
     parser.add_argument(
         "--star",

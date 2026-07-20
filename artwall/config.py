@@ -189,6 +189,13 @@ class Config:
         return self.trash_dir / f"Q{qid}.jpg"
 
     @property
+    def stars_pid(self) -> Path:
+        """PID of the gallery server currently serving, so a fresh `--stars` can
+        replace it. Under `cache_dir`: disposable, and meaningless after a reboot
+        (a recycled PID is caught by checking the process's cmdline, not this file)."""
+        return self.cache_dir / "stars.pid"
+
+    @property
     def stamp(self) -> Path:
         """Marker file whose mtime records the last wallpaper change."""
         return self.cache_dir / "last_change"
