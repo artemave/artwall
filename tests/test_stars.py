@@ -1,3 +1,5 @@
+import contextlib
+import dataclasses
 import json
 import random
 import re
@@ -5,13 +7,22 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from artwall import app, stars
 from artwall.config import Config
 from tests.server import serve
-from tests.test_app import IMAGE_BYTES, Recorder, config_for, fake_font, outputs, wikidata_router
+from tests.test_app import (
+    IMAGE_BYTES,
+    Recorder,
+    config_for,
+    fake_font,
+    link_to,
+    outputs,
+    wikidata_router,
+)
 
 
 def star_of(qid, **overrides):
@@ -517,6 +528,173 @@ class ServeGallery(unittest.TestCase):
     def test_an_unknown_post_is_not_found(self):
         status, _location = self.post("/nope")
         self.assertEqual(status, 404)
+
+
+class StarFromLink(unittest.TestCase):
+    """`star_link()` against a real loopback Wikidata/Commons — no mocks."""
+
+    def setUp(self):
+        self.cache_dir = Path(tempfile.mkdtemp())
+        self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+
+    def config(self, **router_kwargs):
+        router = wikidata_router([101], **router_kwargs)
+        server = self.stack.enter_context(serve(router))
+        router.base = server.base_url
+        return dataclasses.replace(
+            config_for(server, self.cache_dir), data_dir=self.data_dir
+        )
+
+    def test_stars_a_pasted_painting_and_archives_the_image(self):
+        cfg = self.config()
+        record, outcome = stars.star_link(cfg, link_to(101))
+
+        self.assertEqual(outcome, "starred")
+        self.assertEqual(record["title"], "Painting 101")
+        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
+        self.assertEqual(cfg.star_image(101).read_bytes(), IMAGE_BYTES)
+
+    def test_the_pasted_record_is_shaped_like_every_other_star(self):
+        cfg = self.config()
+        record, _ = stars.star_link(cfg, link_to(101))
+        self.assertEqual(set(record), set(star_of(101)))
+
+    def test_pasting_a_painting_that_is_already_hung_changes_nothing(self):
+        # not a toggle: you paste a link to *add*, so a repeat must not remove it
+        cfg = self.config()
+        stars.star_link(cfg, link_to(101))
+        _record, outcome = stars.star_link(cfg, link_to(101))
+
+        self.assertEqual(outcome, "already")
+        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
+        self.assertTrue(cfg.star_image(101).exists())
+
+    def test_pasting_a_trashed_painting_restores_it(self):
+        # adding it afresh would leave the trash holding the same QID, and
+        # restoring that later would hang a second copy of the painting
+        cfg = self.config()
+        stars.star_link(cfg, link_to(101))
+        stars.unstar(cfg, 101)
+
+        _record, outcome = stars.star_link(cfg, link_to(101))
+
+        self.assertEqual(outcome, "restored")
+        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
+        self.assertEqual(stars.load_trash(cfg), [])
+        self.assertEqual(cfg.star_image(101).read_bytes(), IMAGE_BYTES)
+        self.assertFalse(cfg.trash_image(101).exists())
+
+    def test_a_bad_link_raises_rather_than_starring_anything(self):
+        cfg = self.config()
+        with self.assertRaises(app.LinkError):
+            stars.star_link(cfg, "https://en.wikipedia.org/wiki/Muqi")
+        self.assertEqual(stars.load(cfg), [])
+
+
+class PasteIntoGallery(unittest.TestCase):
+    """The paste box, driven over real HTTP against the real gallery server."""
+
+    def setUp(self):
+        self.opener = urllib.request.build_opener(_NoRedirect)
+        self.cache_dir = Path(tempfile.mkdtemp())
+        self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+
+        router = wikidata_router([101, 102])
+        wiki = self.stack.enter_context(serve(router))
+        router.base = wiki.base_url
+        self.cfg = dataclasses.replace(
+            config_for(wiki, self.cache_dir), data_dir=self.data_dir
+        )
+
+        self.server = stars.serve_gallery(self.cfg, Recorder())
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = self.server.url.rstrip("/")
+
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path) as r:
+            return r.read().decode()
+
+    def paste(self, link):
+        """Submit the paste form exactly as a browser does, without following the 303."""
+        body = urllib.parse.urlencode({"link": link}).encode()
+        request = urllib.request.Request(
+            self.base + "/star",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            response = self.opener.open(request)
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("Location")
+        return response.status, response.headers.get("Location")
+
+    def test_the_paste_box_is_on_the_served_page(self):
+        page = self.get("/")
+        self.assertIn('<form class="add" method="post" action="/star">', page)
+        self.assertIn('name="link"', page)
+
+    def test_the_archived_page_has_no_paste_box(self):
+        # nothing would answer the post once the command exits
+        self.assertNotIn('action="/star"', self.cfg.stars_page.read_text())
+
+    def test_pasting_a_link_hangs_the_painting(self):
+        status, location = self.paste(link_to(101))
+
+        self.assertEqual(status, 303)
+        self.assertEqual(location, "/")
+        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101])
+        self.assertEqual(self.cfg.star_image(101).read_bytes(), IMAGE_BYTES)
+
+    def test_the_new_painting_appears_in_the_gallery(self):
+        self.paste(link_to(101))
+        page = self.get("/")
+        self.assertIn('<img src="images/Q101.jpg"', page)
+        self.assertIn("Starred <i>Painting 101</i>.", page)
+
+    def test_pasting_updates_the_archived_page_too(self):
+        self.paste(link_to(101))
+        self.assertIn("Q101.jpg", self.cfg.stars_page.read_text())
+
+    def test_a_repeat_paste_says_so_instead_of_unstarring(self):
+        self.paste(link_to(101))
+        self.get("/")  # burn the first flash
+        self.paste(link_to(101))
+
+        self.assertIn("Already in the gallery: <i>Painting 101</i>.", self.get("/"))
+        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101])
+
+    def test_pasting_a_trashed_painting_reports_the_restore(self):
+        self.paste(link_to(101))
+        stars.unstar(self.cfg, 101)
+        self.paste(link_to(101))
+
+        self.assertIn("Restored from the trash: <i>Painting 101</i>.", self.get("/"))
+
+    def test_a_link_to_no_image_comes_back_as_a_message_not_an_error(self):
+        # typed input: a bad link is expected, and must not replace the gallery
+        status, _location = self.paste("https://en.wikipedia.org/wiki/Muqi")
+        self.assertEqual(status, 303)
+        page = self.get("/")
+        self.assertIn("Couldn&#x27;t add that link", page)
+        self.assertIn("doesn&#x27;t point at an image", page)
+        self.assertEqual(stars.load(self.cfg), [])
+
+    def test_an_empty_paste_is_reported_the_same_way(self):
+        self.paste("")
+        self.assertIn("Couldn&#x27;t add that link", self.get("/"))
+
+    def test_the_paste_box_shows_on_an_empty_gallery_too(self):
+        # it's the one place you'd look when there's nothing starred yet
+        page = self.get("/")
+        self.assertIn("Nothing starred yet", page)
+        self.assertIn('action="/star"', page)
 
 
 class TrashFile(unittest.TestCase):

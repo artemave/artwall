@@ -94,6 +94,47 @@ in the foreground until you Ctrl-C it, rather than just opening a file — a pag
 loaded from `file://` can't delete anything. It binds `127.0.0.1` on a port the
 OS picks, serves only your archived paintings, and needs no JavaScript.
 
+### Adding a painting you found yourself
+
+The wallpaper only ever offers you one painting at a time, but reading about an
+artist usually turns up others. The gallery has a **paste box** for those: open
+the painting's image on Wikipedia, copy the link, paste it in, and it's hung
+alongside the rest.
+
+Both link shapes work — the one you get from clicking an image in an article:
+
+```
+https://en.wikipedia.org/wiki/Muqi#/media/File:Mu-ch'i_001.jpg
+```
+
+and the file page itself, on Wikipedia or Commons:
+
+```
+https://en.wikipedia.org/wiki/File:Bertholet_Fl%C3%A9mal_-_Heliodorus_Driven_from_the_Temple.jpg
+```
+
+The link identifies an *image*, so artwall asks Wikimedia Commons which artwork
+that scan reproduces, and takes the artist, title and date from Wikidata — the
+same place the wallpaper's caption comes from. A pasted painting is therefore
+indistinguishable from one you starred off the wallpaper: same record, same
+archived image, same trash.
+
+Pasting a painting that's already hung says so and changes nothing (it's an
+*add* box, not a toggle); pasting one that's in the trash restores it.
+
+A link can be turned down for four reasons, each said plainly on the page:
+
+| | |
+|---|---|
+| the link names no image | you copied the article link, not the image's |
+| not on Wikimedia Commons | in-copyright art is hosted on Wikipedia itself, and can't be archived |
+| not linked to a painting on Wikidata | a scan nobody has connected to its artwork yet |
+| linked to something that isn't a painting | e.g. a photo of the artist, or a motif rather than a specific work |
+
+That last check is deliberate: artwall collects paintings (`instance of:
+painting`), so prints, drawings and photographs are declined even when the link
+resolves perfectly.
+
 ### The trash
 
 **Unstarring never deletes anything.** The painting moves to the trash, keeping

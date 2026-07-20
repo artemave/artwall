@@ -26,6 +26,10 @@ STARS_TRASH_DIR = ".trash"
 SPARQL_URL = "https://query.wikidata.org/sparql"
 API_URL = "https://www.wikidata.org/w/api.php"
 COMMONS_URL = "https://commons.wikimedia.org/wiki/Special:FilePath/"
+# Commons' own Action API. Separate from `API_URL` (Wikidata's): resolving a
+# pasted image link starts at the *file*, and only Commons knows which Wikidata
+# item that file depicts (its structured data).
+COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php"
 IDS_TTL = 30 * 24 * 60 * 60  # the painting catalogue rarely changes; refetch monthly
 
 # Throttle for event-driven runs: with --throttle, a run is a no-op if the last
@@ -76,6 +80,7 @@ class Config:
     sparql_url: str = SPARQL_URL
     api_url: str = API_URL
     commons_url: str = COMMONS_URL
+    commons_api_url: str = COMMONS_API_URL
     ids_ttl: int = IDS_TTL
     # content filters (all optional). dates are inception years (negative = BC);
     # the rest are lists of Wikidata QIDs — find them with `--find` or wikidata.org.

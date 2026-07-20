@@ -53,7 +53,8 @@ python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coa
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
 python3 -m artwall --star DP-1            # star/unstar that display's painting (the overlay's ★ button)
-python3 -m artwall --stars                # serve the starred gallery on loopback + xdg-open it (Ctrl-C to stop)
+python3 -m artwall --stars                # serve the starred gallery on loopback + xdg-open it (Ctrl-C to stop);
+                                          # its paste box stars a painting from a Wikipedia image link
 python3 -m artwall.overlay               # the "interactive"-mode caption overlay (needs PyGObject + gtk-layer-shell)
 ```
 
@@ -63,7 +64,8 @@ The entry point is intentionally thin; all logic lives in importable modules so
 it can be tested without network or `swaymsg`.
 
 - `artwall/config.py` — `Config` dataclass holding cache paths, the Wikidata
-  endpoints (`sparql_url` for WDQS, `api_url` for the Action API, `commons_url`
+  endpoints (`sparql_url` for WDQS, `api_url` for the Action API,
+  `commons_api_url` for Commons' own Action API, `commons_url`
   for images), `ids_ttl`, the content knobs
   (`date_begin`/`date_end`, `language`, `artists`/`movements`/`genres`/
   `collections` QID lists, `font_size`, `caption_mode`, `stars_image_width`) and
@@ -93,14 +95,43 @@ it can be tested without network or `swaymsg`.
 - `artwall/wikidata.py` — **pure** source logic: build the catalogue SPARQL
   (`catalogue_query`, filters → `VALUES`/property clauses) and parse its CSV
   (`parse_catalogue`); parse an Action-API entity into image-filename/creator/
-  title/year (`parse_entity`) and read a `label`; parse the entity search
-  (`parse_search`); build the sized Commons image URL from a filename
+  title/date (`parse_entity`) and read a `label`; parse the entity search
+  (`parse_search`); resolve a pasted Wikipedia image link (`parse_file_link` →
+  the `File:…` title, taken from the media-viewer **fragment** in preference to
+  the path, because a viewer link's path is the *article* — usually the artist —
+  and only the fragment names the image that was clicked; `parse_file_pageid`;
+  `parse_artwork_qid`; `is_painting`); build the sized Commons image URL from a
+  filename
   (`image_url` → `Special:FilePath/<file>?width=`); pull the Wikipedia article
   URL from a `sitelinks/urls` response (`parse_sitelink`) and build the
   always-present Wikidata page URL (`entity_url`, the article fallback). Prefer
-  adding source logic here. **Two services on purpose:** WDQS (`sparql_url`) is outage-prone, so it's
+  adding source logic here.
+  **Dates carry a precision, and it matters:** Wikidata stores a coarse date as a
+  *year* plus a precision code — the 13th century is `+1300` with precision 7 — so
+  reading the year alone invents an exactness the record never claimed (a work
+  dated circa 1250 captioned "1300"; this was a real bug). `_date()` honours
+  precision **only when the stored year agrees with it** (a century ending `00`, a
+  decade ending `0`) → "13th century", "1860s". Roughly half the catalogue's
+  century-tagged works actually hold a specific year (`+1732`); that's a mis-entry
+  rather than a claim about the century, so the year is kept. A `circa` qualifier
+  (P1480, on the *statement* — which is why `_statement()` exists beside `_claim()`)
+  prefixes "c.". A rounded coarse date is never marked circa: "13th century"
+  already says approximate.
+  **Two services on purpose:** WDQS (`sparql_url`) is outage-prone, so it's
   used *only* for the monthly catalogue; every per-painting fetch goes to the
   stable Action API.
+  **A third endpoint for pasted links:** `commons_api_url` is Commons' *own*
+  Action API, distinct from Wikidata's `api_url`. A pasted link names a file, and
+  only Commons knows which artwork that file shows — its structured data lives on
+  `M<pageid>` entities under `statements` (not `claims`).
+  `parse_artwork_qid` tries `DEPICTED_ARTWORK` in order: P6243 ("digital
+  representation of") is exact, P180 ("depicts") is loose but is **all many real
+  scans carry** — the Muqi handscroll this was built for has only P180 — so it
+  can't be skipped. What makes leaning on P180 safe is `is_painting()`: P180 on a
+  photograph points at whatever is in frame, so the resolved entity is checked for
+  `P31 = Q3305213` before anything is starred (this is what turns down a portrait
+  photo of the artist, or a motif item like "Red Fuji", which is an *artistic
+  theme* rather than a specific work).
 - `artwall/selection.py` — **pure** `caption` formatting (artist/title/date) and
   `record()`, the painting dict `run()` writes as `caption-<name>.json` and the
   overlay copies verbatim into the star list (qid/artist/title/date/image/url —
@@ -113,13 +144,25 @@ it can be tested without network or `swaymsg`.
   saving the list, so a failed download never leaves a star pointing at a missing
   image. `write_page()` writes the archived `stars.html`; `serve_gallery()` backs
   `--stars`.
+  `star_link(config, link)` is the gallery's paste box: it hands the URL to
+  `app.resolve_link()` and archives the result. Deliberately **not** a toggle —
+  you paste to *add*, so a link you've already hung reports `"already"` and
+  changes nothing rather than silently unstarring it. A painting sitting in the
+  trash is `restore()`d (`"restored"`) instead of re-downloaded: adding it afresh
+  would leave the trash holding the same QID, and restoring *that* later would
+  hang a second copy of the same painting.
   **Why a server:** the overlay's ★ can only unstar the painting *currently* on a
   display, so the gallery must be able to remove an older one — and a `file://`
   page cannot delete a file. So `--stars` renders over a loopback `http.server`
   (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
   + 303 — no JavaScript. `_Gallery` answers exactly `/`, `/trash`,
   `/images/Q<n>.jpg`, `/trash/images/Q<n>.jpg`, `POST /unstar/<n>`,
-  `POST /restore/<n>` and `POST /trash/empty`; everything else 404s. It's a
+  `POST /restore/<n>`, `POST /star` and `POST /trash/empty`; everything else
+  404s. `POST /star` is the one route that reads a **request body** (the pasted
+  link, form-urlencoded) — every other mutation carries its QID in the path. A
+  link that won't resolve comes back as a `Flash`, not an error status: it's
+  typed input, so a typo must not replace the gallery with a browser error page.
+  It's a
   foreground command, not a daemon: `__main__` runs `serve_forever()` until Ctrl-C.
   `write_page()` still writes the *button-less, trash-link-less* `stars.html` on
   every mutation — nothing would answer those POSTs once the server exits, and its
@@ -158,6 +201,14 @@ it can be tested without network or `swaymsg`.
   Wikipedia URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
   `_render()` returns a `Rendered` NamedTuple (qid + painting dict + url) rather
   than a widening tuple.
+  `resolve_link(config, link)` backs the gallery's paste box: a pasted Wikipedia
+  image URL → Commons file → the artwork's QID → the **same** `selection.record()`
+  the wallpaper writes. That equivalence is the whole point — a pasted painting is
+  indistinguishable from a shown one, so the gallery, trash and archive stay a
+  single code path (`test_the_record_matches_what_run_writes_for_the_same_painting`
+  pins it). Every rejection raises `LinkError`, whose message is written to be read
+  by whoever pasted the link, so the gallery can show it verbatim instead of
+  mapping exception types to prose.
 - `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent
   GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched from the
   Sway config) showing one `BOTTOM`-layer clickable caption per display — each

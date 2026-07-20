@@ -162,6 +162,61 @@ def search_entities(term: str, config: Config | None = None) -> list[tuple[str, 
     return wikidata.parse_search(result)
 
 
+class LinkError(Exception):
+    """A pasted link that doesn't lead to a painting we can star.
+
+    Carries a message meant to be read by whoever pasted it, so the gallery can
+    show it verbatim instead of translating error types into prose.
+    """
+
+
+def resolve_link(config: Config, link: str) -> dict[str, Any]:
+    """Turn a pasted Wikipedia image link into the record `run()` writes.
+
+    The image itself is the only thing a Wikipedia article gives you a link to —
+    the article behind it is usually the *artist*, not the painting. So the file
+    is the starting point: Commons' structured data says which Wikidata artwork
+    the scan reproduces (P6243), and from that QID the ordinary lookup takes over.
+    The result is indistinguishable from a painting that arrived on the wallpaper,
+    which is what keeps the gallery, the trash and the archive a single code path.
+    """
+    title = wikidata.parse_file_link(link)
+    if title is None:
+        raise LinkError(
+            "that link doesn't point at an image — open the painting on Wikipedia "
+            "and copy the link to the image itself"
+        )
+
+    found = web.get_json(
+        config.commons_api_url,
+        {"action": "query", "titles": title, "format": "json"},
+    )
+    pageid = wikidata.parse_file_pageid(found)
+    if pageid is None:
+        # Wikimedia Commons holds the freely-licensed scans; an image that lives
+        # only on a language Wikipedia is there because it *isn't* free to reuse.
+        raise LinkError(f"{title} isn't on Wikimedia Commons, so it can't be archived")
+
+    media_id = f"M{pageid}"
+    structured = web.get_json(
+        config.commons_api_url,
+        {"action": "wbgetentities", "ids": media_id, "format": "json"},
+    )
+    qid = wikidata.parse_artwork_qid(structured, media_id)
+    if qid is None:
+        raise LinkError(f"{title} isn't linked to a painting on Wikidata")
+
+    entity = _get_entity(config, f"Q{qid}", "claims|labels")
+    if not wikidata.is_painting(entity, f"Q{qid}"):
+        raise LinkError(f"{title} is linked to Q{qid}, which isn't a painting")
+
+    painting = wikidata.parse_entity(entity, qid, config.language)
+    if painting is None:
+        raise LinkError(f"Q{qid} has no image on Wikidata")
+    painting["artist"] = _artist(config, painting["creator_qid"])
+    return selection.record(qid, painting, _wiki_url(config, qid, painting["creator_qid"]))
+
+
 def parse_outputs(raw: str) -> list[Output]:
     """Active outputs (name + pixel size + scale) from `swaymsg -t get_outputs -r`."""
     return [

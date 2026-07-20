@@ -36,11 +36,12 @@ import http.server
 import re
 import shutil
 import subprocess
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import cache, commands, selection, web, wikidata
+from . import app, cache, commands, selection, web, wikidata
 from .config import STARS_IMAGE_DIR, Config
 
 Star = dict[str, Any]
@@ -152,10 +153,20 @@ figure:hover .corner button { opacity: .85; }
   margin: -1.5rem 0 2.5rem; color: var(--dim); font-size: .9rem;
 }
 .flash form { margin: 0; }
-.flash button, .danger button {
+.flash button, .danger button, .add button {
   border: 0; border-radius: 4px; padding: .35rem .9rem; cursor: pointer;
   background: var(--fg); color: var(--bg); font: inherit; font-weight: 600;
 }
+
+/* Paste a Wikipedia image link to hang a painting you found yourself. Sits above
+   the grid on the served page only — the archived copy has nothing to post to. */
+.add { display: flex; gap: .6rem; margin: 0 0 2.5rem; }
+.add input {
+  flex: 1; max-width: 34rem; padding: .4rem .7rem;
+  border: 1px solid rgba(128,128,128,.45); border-radius: 4px;
+  background: transparent; color: var(--fg); font: inherit;
+}
+.add input:focus-visible { outline: 2px solid var(--fg); outline-offset: -1px; }
 .danger { margin: 0; }
 .danger button { background: #a4302c; color: #fff; }
 """
@@ -244,6 +255,31 @@ def star(config: Config | None = None, *, output: str) -> bool:
     return starred
 
 
+def star_link(config: Config, link: str) -> tuple[Star, str]:
+    """Star a painting from a pasted Wikipedia image link.
+
+    Unlike the overlay's ★ this is *not* a toggle — you paste a link to add a
+    painting, so pasting one that's already hung says so and changes nothing
+    rather than quietly removing it. A painting still in the trash is restored
+    (image, position and all) instead of re-downloaded: adding it afresh would
+    leave the trash holding the same QID, and restoring that later would hang a
+    second copy. Returns the record and which of the three happened.
+    """
+    record = app.resolve_link(config, link)
+    qid = record["qid"]
+    if is_starred(load(config), qid):
+        return record, "already"
+    if in_trash(config, qid):
+        return restore(config, qid), "restored"
+
+    image = config.star_image(qid)
+    image.parent.mkdir(parents=True, exist_ok=True)
+    url = wikidata.image_url(config.commons_url, record["image"], config.stars_image_width)
+    web.download(url, image)  # archive before saving, as `star()` does
+    save(config, [*load(config), record])
+    return record, "starred"
+
+
 def unstar(config: Config, qid: int) -> Star:
     """Move a painting out of the gallery and into the trash.
 
@@ -290,6 +326,24 @@ def empty_trash(config: Config) -> int:
 # --------------------------------------------------------------------------- #
 # rendering — pure: markup in, no IO
 # --------------------------------------------------------------------------- #
+
+
+# `type="url"` lets the browser reject an obvious non-link before the round trip;
+# everything else is decided by `resolve_link()`, which has to fetch to know.
+ADD_FORM = (
+    '<form class="add" method="post" action="/star">'
+    '<input type="url" name="link" required '
+    'placeholder="Paste a Wikipedia link to a painting" '
+    'aria-label="Wikipedia link to a painting">'
+    '<button type="submit">★ Add</button></form>'
+)
+
+# What the flash says for each outcome of a paste.
+ADD_VERBS = {
+    "starred": "Starred",
+    "already": "Already in the gallery:",
+    "restored": "Restored from the trash:",
+}
 
 
 def _flash(flash: Flash) -> str:
@@ -376,10 +430,12 @@ def render_page(
     else:
         title = "★ Starred paintings"
         body = (
-            '<p class="empty">Nothing starred yet. '
-            "Click the ★ next to a wallpaper caption to add it here.</p>"
+            '<p class="empty">Nothing starred yet. Click the ★ next to a wallpaper '
+            "caption, or paste a link to a painting you found on Wikipedia.</p>"
         )
 
+    if interactive:
+        body = ADD_FORM + body
     heading = title
     if interactive and trash_count:
         plural = "" if trash_count == 1 else "s"
@@ -491,10 +547,27 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
         else:
             self._not_found()
 
+    def _add_link(self) -> Flash:
+        """Star whatever the pasted link resolves to, reporting either way.
+
+        A bad link is the expected case here — it's typed input — so it comes back
+        as a flash on the page rather than an error status the browser would show
+        instead of the gallery.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+        try:
+            record, outcome = star_link(self.config, form.get("link", [""])[0])
+        except app.LinkError as error:
+            return Flash(f"Couldn't add that link — {error}")
+        return Flash(ADD_VERBS[outcome], record["title"])
+
     def do_POST(self) -> None:
         unstar_match = UNSTAR_PATH.match(self.path)
         restore_match = RESTORE_PATH.match(self.path)
-        if unstar_match and is_starred(load(self.config), int(unstar_match["qid"])):
+        if self.path == "/star":
+            self.session.flash = self._add_link()
+        elif unstar_match and is_starred(load(self.config), int(unstar_match["qid"])):
             removed = unstar(self.config, int(unstar_match["qid"]))
             self.session.flash = Flash("Removed", removed["title"], removed["qid"])
         elif restore_match and in_trash(self.config, int(restore_match["qid"])):

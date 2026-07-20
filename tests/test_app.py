@@ -2,6 +2,7 @@ import fcntl
 import json
 import os
 import random
+import re
 import tempfile
 import time
 import unittest
@@ -25,22 +26,48 @@ class Recorder:
         self.calls.append((argv, check))
 
 
-def wikidata_router(qids, missing=(), anonymous=(), no_article=(), artist_article=None):
+# A Commons file page id, derived from the painting's QID so the fake Commons and
+# the fake Wikidata agree without a lookup table: File:Q101.jpg <-> M9101 <-> Q101.
+COMMONS_PAGE_OFFSET = 9000
+FILE_TITLE = re.compile(r"^File:Q(\d+)\.jpg$")
+
+
+def wikidata_router(
+    qids,
+    missing=(),
+    anonymous=(),
+    no_article=(),
+    artist_article=None,
+    unknown_files=(),
+    unlinked_files=(),
+    not_paintings=(),
+    depicts_only=(),
+):
     """Serve a tiny Wikidata/Commons: WDQS catalogue CSV, Action-API entities, images.
 
     `missing` QIDs come back with no image (as if deleted since the catalogue
     cached) so the caller re-picks; `anonymous` QIDs have no creator; `no_article`
     QIDs have no Wikipedia sitelink; `artist_article` (a URL) gives the shared
     creator a Wikipedia article, so the link can fall back from painting to artist.
+
+    The Commons side backs `resolve_link()`: `unknown_files` aren't on Commons at
+    all (as in-copyright art isn't), `unlinked_files` are there but name no artwork,
+    `depicts_only` carry the loose P180 instead of P6243 (as many real scans do),
+    and `not_paintings` resolve to an entity that isn't a painting.
     """
     missing, anonymous, no_article = set(missing), set(anonymous), set(no_article)
+    unknown_files, unlinked_files = set(unknown_files), set(unlinked_files)
+    not_paintings, depicts_only = set(not_paintings), set(depicts_only)
 
     def entity(num):
+        instance = "Q5" if num in not_paintings else wikidata.PAINTING_QID
+        claims = {"P31": [{"mainsnak": {"datavalue": {"value": {"id": instance}}}}]}
         if num in missing:
-            return {"claims": {}, "labels": {}}  # no P18 -> parse_entity returns None
-        claims = {"P18": [{"mainsnak": {"datavalue": {"value": f"Q{num}.jpg"}}}]}
+            # still an entity, just imageless -> parse_entity returns None
+            return {"claims": claims, "labels": {}}
+        claims["P18"] = [{"mainsnak": {"datavalue": {"value": f"Q{num}.jpg"}}}]
         if num not in anonymous:
-            when = {"time": "+1700-00-00T00:00:00Z"}
+            when = {"time": "+1700-00-00T00:00:00Z", "precision": 9}
             claims["P170"] = [{"mainsnak": {"datavalue": {"value": {"id": "Q999"}}}}]
             claims["P571"] = [{"mainsnak": {"datavalue": {"value": when}}}]
         ent = {"claims": claims, "labels": {"en": {"value": f"Painting {num}"}}}
@@ -48,12 +75,33 @@ def wikidata_router(qids, missing=(), anonymous=(), no_article=(), artist_articl
             ent["sitelinks"] = {"enwiki": {"url": f"https://en.wikipedia.org/wiki/Painting_{num}"}}
         return ent
 
+    def commons(params):
+        """Commons' Action API: file title -> page id, then page id -> P6243."""
+        if params["action"][0] == "query":
+            match = FILE_TITLE.match(params["titles"][0])
+            num = int(match[1]) if match else None
+            if num is None or num in unknown_files:
+                return {"query": {"pages": {"-1": {"missing": ""}}}}
+            pageid = COMMONS_PAGE_OFFSET + num
+            return {"query": {"pages": {str(pageid): {"pageid": pageid}}}}
+        media_id = params["ids"][0]
+        num = int(media_id[1:]) - COMMONS_PAGE_OFFSET
+        prop = "P180" if num in depicts_only else "P6243"
+        statements = (
+            {}
+            if num in unlinked_files
+            else {prop: [{"mainsnak": {"datavalue": {"value": {"numeric-id": num}}}}]}
+        )
+        return {"entities": {media_id: {"statements": statements}}}
+
     def router(path):
         parsed = urllib.parse.urlparse(path)
         params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/sparql":  # catalogue (the only WDQS use)
             body = "qid\n" + "\n".join(str(q) for q in qids)
             return 200, "text/csv", body.encode()
+        if parsed.path == "/commons-api":
+            return 200, "application/json", json.dumps(commons(params)).encode()
         if parsed.path == "/api":  # wbgetentities for a painting or its creator
             eid = params["ids"][0]
             if eid == "Q999":  # the shared creator
@@ -83,6 +131,7 @@ def config_for(server, cache_dir, caption_mode="text"):
         sparql_url=server.base_url + "/sparql",
         api_url=server.base_url + "/api",
         commons_url=server.base_url + "/img/",
+        commons_api_url=server.base_url + "/commons-api",
         caption_mode=caption_mode,
     )
 
@@ -596,6 +645,98 @@ class PaintingIdsTests(unittest.TestCase):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         with self.assertRaises(OSError):
             app.painting_ids(cfg)
+
+
+def link_to(num):
+    """A media-viewer link exactly as Wikipedia hands it out, for File:Q<n>.jpg."""
+    return f"https://en.wikipedia.org/wiki/Artist#/media/File:Q{num}.jpg"
+
+
+class ResolveLink(unittest.TestCase):
+    """A pasted image link -> the same record `run()` writes for the overlay."""
+
+    def setUp(self):
+        self.cache_dir = Path(tempfile.mkdtemp())
+
+    def resolve(self, link, **router_kwargs):
+        router = wikidata_router([101], **router_kwargs)
+        with serve(router) as s:
+            router.base = s.base_url
+            return app.resolve_link(config_for(s, self.cache_dir), link)
+
+    def test_builds_the_full_record_from_a_link(self):
+        record = self.resolve(link_to(101))
+        self.assertEqual(
+            record,
+            {
+                "qid": 101,
+                "artist": "Tester",
+                "title": "Painting 101",
+                "date": "1700",
+                "image": "Q101.jpg",
+                "url": "https://en.wikipedia.org/wiki/Painting_101",
+            },
+        )
+
+    def test_the_record_matches_what_run_writes_for_the_same_painting(self):
+        # the whole point: a pasted painting is indistinguishable from a shown one,
+        # so the gallery, the trash and the archive stay one code path
+        router = wikidata_router([101])
+        with serve(router) as s:
+            router.base = s.base_url
+            cfg = config_for(s, self.cache_dir, caption_mode="interactive")
+            app.run(
+                config=cfg,
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+            shown = json.loads(cfg.caption_file("DP-1").read_text())
+            pasted = app.resolve_link(cfg, link_to(101))
+
+        self.assertEqual(pasted, shown)
+
+    def test_a_file_page_link_resolves_the_same_way(self):
+        record = self.resolve("https://en.wikipedia.org/wiki/File:Q101.jpg")
+        self.assertEqual(record["qid"], 101)
+
+    def test_a_link_naming_no_image_is_rejected(self):
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve("https://en.wikipedia.org/wiki/Muqi")
+        self.assertIn("doesn't point at an image", str(cm.exception))
+
+    def test_a_file_that_is_not_on_commons_is_rejected(self):
+        # in-copyright art is hosted on the language wiki, not Commons
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(link_to(101), unknown_files=[101])
+        self.assertIn("isn't on Wikimedia Commons", str(cm.exception))
+
+    def test_a_file_with_no_link_to_an_artwork_is_rejected(self):
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(link_to(101), unlinked_files=[101])
+        self.assertIn("isn't linked to a painting", str(cm.exception))
+
+    def test_a_file_carrying_only_depicts_still_resolves(self):
+        # the Muqi handscroll this was built for has P180 and no P6243
+        self.assertEqual(self.resolve(link_to(101), depicts_only=[101])["qid"], 101)
+
+    def test_a_depicts_pointing_at_a_non_painting_is_still_rejected(self):
+        # P180 is loose — a photo depicts whatever is in frame — so the painting
+        # guard is what makes leaning on it safe
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(link_to(101), depicts_only=[101], not_paintings=[101])
+        self.assertIn("isn't a painting", str(cm.exception))
+
+    def test_a_file_depicting_something_that_is_not_a_painting_is_rejected(self):
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(link_to(101), not_paintings=[101])
+        self.assertIn("isn't a painting", str(cm.exception))
+
+    def test_an_artwork_with_no_image_is_rejected(self):
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(link_to(101), missing=[101])
+        self.assertIn("no image", str(cm.exception))
 
 
 if __name__ == "__main__":
