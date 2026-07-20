@@ -42,6 +42,8 @@ def wikidata_router(
     unlinked_files=(),
     not_paintings=(),
     depicts_only=(),
+    described_files=(),
+    described_type="painting",
 ):
     """Serve a tiny Wikidata/Commons: WDQS catalogue CSV, Action-API entities, images.
 
@@ -54,10 +56,15 @@ def wikidata_router(
     all (as in-copyright art isn't), `unlinked_files` are there but name no artwork,
     `depicts_only` carry the loose P180 instead of P6243 (as many real scans do),
     and `not_paintings` resolve to an entity that isn't a painting.
+
+    `described_files` are `unlinked_files` that still describe their artwork in an
+    `{{Artwork}}` wikitext template — the Commons-only fallback. `described_type`
+    sets that template's `object type`, so a non-painting can be rejected there too.
     """
     missing, anonymous, no_article = set(missing), set(anonymous), set(no_article)
     unknown_files, unlinked_files = set(unknown_files), set(unlinked_files)
     not_paintings, depicts_only = set(not_paintings), set(depicts_only)
+    described_files = set(described_files)
 
     def entity(num):
         instance = "Q5" if num in not_paintings else wikidata.PAINTING_QID
@@ -84,6 +91,18 @@ def wikidata_router(
                 return {"query": {"pages": {"-1": {"missing": ""}}}}
             pageid = COMMONS_PAGE_OFFSET + num
             return {"query": {"pages": {str(pageid): {"pageid": pageid}}}}
+        if params["action"][0] == "parse":  # the wikitext fallback
+            match = FILE_TITLE.match(params["page"][0])
+            num = int(match[1])
+            wikitext = (
+                "== {{int:filedesc}} ==\n{{Artwork\n |wikidata = \n"
+                f" |artist = {{{{Creator:Painter {num}}}}}\n"
+                f" |title = {{{{title|en=Described {num}|de=Beschrieben {num}}}}}\n"
+                f" |date = 1911\n |object type = {described_type}\n}}}}"
+                if num in described_files
+                else "== {{int:filedesc}} ==\n{{Information|author=Somebody}}"
+            )
+            return {"parse": {"wikitext": {"*": wikitext}}}
         media_id = params["ids"][0]
         num = int(media_id[1:]) - COMMONS_PAGE_OFFSET
         prop = "P180" if num in depicts_only else "P6243"
@@ -132,6 +151,9 @@ def config_for(server, cache_dir, caption_mode="text"):
         api_url=server.base_url + "/api",
         commons_url=server.base_url + "/img/",
         commons_api_url=server.base_url + "/commons-api",
+        # not the loopback server: nothing fetches it, it only has to end up in the
+        # record as the article link for a painting with no Wikidata item
+        commons_file_url="https://commons.example/wiki/",
         caption_mode=caption_mode,
     )
 
@@ -310,7 +332,7 @@ class RunTests(unittest.TestCase):
         self.assertNotIn("-annotate", compose_argv)  # nothing burned into the wallpaper
         self.assertIn("-composite", compose_argv)  # painting still composed
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
-        self.assertEqual(data["qid"], qid)
+        self.assertEqual(data["key"], f"Q{qid}")
         self.assertEqual(data["title"], f"Painting {qid}")
         self.assertEqual(data["artist"], "Tester")
         self.assertEqual(data["date"], "1700")
@@ -669,7 +691,7 @@ class ResolveLink(unittest.TestCase):
         self.assertEqual(
             record,
             {
-                "qid": 101,
+                "key": "Q101",
                 "artist": "Tester",
                 "title": "Painting 101",
                 "date": "1700",
@@ -699,7 +721,7 @@ class ResolveLink(unittest.TestCase):
 
     def test_a_file_page_link_resolves_the_same_way(self):
         record = self.resolve("https://en.wikipedia.org/wiki/File:Q101.jpg")
-        self.assertEqual(record["qid"], 101)
+        self.assertEqual(record["key"], "Q101")
 
     def test_a_link_naming_no_image_is_rejected(self):
         with self.assertRaises(app.LinkError) as cm:
@@ -712,14 +734,54 @@ class ResolveLink(unittest.TestCase):
             self.resolve(link_to(101), unknown_files=[101])
         self.assertIn("isn't on Wikimedia Commons", str(cm.exception))
 
-    def test_a_file_with_no_link_to_an_artwork_is_rejected(self):
+    def test_a_file_describing_nothing_at_all_is_rejected(self):
         with self.assertRaises(app.LinkError) as cm:
             self.resolve(link_to(101), unlinked_files=[101])
-        self.assertIn("isn't linked to a painting", str(cm.exception))
+        self.assertIn("doesn't describe one either", str(cm.exception))
+
+    def test_a_file_described_only_in_wikitext_still_resolves(self):
+        # the real case this was built for: the Commons page carries a full
+        # {{Artwork}} template, its structured data carries nothing, and the
+        # painting has no Wikidata item to link to at all
+        record = self.resolve(link_to(101), unlinked_files=[101], described_files=[101])
+        self.assertEqual(
+            record,
+            {
+                "key": "M9101",  # the Commons page is the identity — there is no QID
+                "artist": "Painter 101",
+                "title": "Described 101",
+                "date": "1911",
+                "image": "Q101.jpg",
+                "url": "https://commons.example/wiki/File:Q101.jpg",
+            },
+        )
+
+    def test_a_wikitext_record_is_shaped_like_a_wikidata_one(self):
+        # the equivalence that keeps the gallery, trash and archive one code path
+        described = self.resolve(link_to(101), unlinked_files=[101], described_files=[101])
+        self.assertEqual(set(described), set(self.resolve(link_to(101))))
+
+    def test_wikitext_describing_a_non_painting_is_rejected(self):
+        # `object type` stands in for the P31 guard: without it a pasted
+        # photograph would be archived as art
+        with self.assertRaises(app.LinkError) as cm:
+            self.resolve(
+                link_to(101),
+                unlinked_files=[101],
+                described_files=[101],
+                described_type="photograph",
+            )
+        self.assertIn("doesn't describe one either", str(cm.exception))
+
+    def test_structured_data_wins_over_wikitext(self):
+        # a file with both is resolved through Wikidata, not the weaker fallback
+        record = self.resolve(link_to(101), described_files=[101])
+        self.assertEqual(record["key"], "Q101")
+        self.assertEqual(record["title"], "Painting 101")
 
     def test_a_file_carrying_only_depicts_still_resolves(self):
         # the Muqi handscroll this was built for has P180 and no P6243
-        self.assertEqual(self.resolve(link_to(101), depicts_only=[101])["qid"], 101)
+        self.assertEqual(self.resolve(link_to(101), depicts_only=[101])["key"], "Q101")
 
     def test_a_depicts_pointing_at_a_non_painting_is_still_rejected(self):
         # P180 is loose — a photo depicts whatever is in frame — so the painting

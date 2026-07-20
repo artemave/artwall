@@ -75,7 +75,7 @@ it can be tested without network or `swaymsg`.
   overlay (`caption-<name>.json`). **Two roots on purpose:** `cache_dir`
   (`~/.cache/artwall`) is disposable — deleting it is a documented safe reset — so
   the stars live under `data_dir` (`~/.local/share/artwall`) instead:
-  `stars_file` (`stars.json`), `star_image(qid)` (`images/Q<qid>.jpg`) and the
+  `stars_file` (`stars.json`), `star_image(key)` (`images/<key>.jpg`) and the
   generated `stars_page` (`stars.html`), which sits *with* the images rather than
   in the cache because it links to them by relative path, keeping the directory
   portable and backup-able; `trash_dir`/`trash_file`/`trash_image(qid)` hold
@@ -100,7 +100,10 @@ it can be tested without network or `swaymsg`.
   the `File:…` title, taken from the media-viewer **fragment** in preference to
   the path, because a viewer link's path is the *article* — usually the artist —
   and only the fragment names the image that was clicked; `parse_file_pageid`;
-  `parse_artwork_qid`; `is_painting`); build the sized Commons image URL from a
+  `parse_artwork_qid`; `is_painting`; and, when structured data names no artwork,
+  read the file's `{{Artwork}}` wikitext instead — `parse_artwork_template`, plus
+  `file_page_url` for the Commons description page that becomes its link); build
+  the sized Commons image URL from a
   filename
   (`image_url` → `Special:FilePath/<file>?width=`); pull the Wikipedia article
   URL from a `sitelinks/urls` response (`parse_sitelink`) and build the
@@ -132,15 +135,37 @@ it can be tested without network or `swaymsg`.
   `P31 = Q3305213` before anything is starred (this is what turns down a portrait
   photo of the artist, or a motif item like "Red Fuji", which is an *artistic
   theme* rather than a specific work).
+  **And a wikitext fallback under that.** Plenty of Commons scans describe their
+  painting *only* in the `{{Artwork}}` template on the file page — artist, title,
+  date, `object type = painting` — while their structured data holds nothing but
+  MIME type and pixel dimensions, and the template's own `|wikidata =` field sits
+  empty. Often there is no Wikidata item to point at in the first place (the
+  Metcalf this was built for has none). So when `parse_artwork_qid` finds nothing,
+  `parse_artwork_template` reads the wikitext instead. It is a strictly worse
+  source and is only ever tried second: free text, no QIDs, and `object type`
+  standing in for the `P31 = Q3305213` guard — weaker, but it is the only claim
+  the file makes about what it shows, and refusing to read it rejects every
+  correctly-described painting on this path. Parsing tracks `{{}}` and `[[]]`
+  depth rather than splitting on `|`, because the fields nest
+  (`{{title|en=…|de=…}}`, `[[Foo|Bar]]`). A *template* date
+  (`{{other date|circa|1911}}`) reduces to "" — better an uncaptioned year than a
+  wrong one.
 - `artwall/selection.py` — **pure** `caption` formatting (artist/title/date) and
   `record()`, the painting dict `run()` writes as `caption-<name>.json` and the
-  overlay copies verbatim into the star list (qid/artist/title/date/image/url —
+  overlay copies verbatim into the star list (key/artist/title/date/image/url —
   everything needed to caption, link and archive a painting without a refetch).
+  **`key` is the painting's identity and it is namespaced**, because paintings
+  arrive from two places: `Q<n>` for a Wikidata item (every wallpaper, and any
+  pasted link whose file names its artwork in structured data), `M<n>` for a
+  Commons page whose artwork lives only in wikitext. The two numbering spaces
+  overlap, so a bare int would silently collide — one key naming two different
+  paintings, and the gallery unstarring the wrong one. The prefix is what the
+  filenames (`images/<key>.jpg`) and every route (`[QM]\d+`) are built on.
 - `artwall/stars.py` — the starred gallery, its trash, and the server for both.
-  **Pure** `toggle()`/`is_starred()` (matched on QID), `render_page(stars,
+  **Pure** `toggle()`/`is_starred()` (matched on key), `render_page(stars,
   interactive, flash, trash_count)` and `render_trash(trashed, flash)` — each one
   self-contained HTML. `star(output)` reads the caption record, toggles it, and
-  downloads the painting into `star_image(qid)` — writing the archive *before*
+  downloads the painting into `star_image(key)` — writing the archive *before*
   saving the list, so a failed download never leaves a star pointing at a missing
   image. `write_page()` writes the archived `stars.html`; `serve_gallery()` backs
   `--stars`.
@@ -156,8 +181,8 @@ it can be tested without network or `swaymsg`.
   page cannot delete a file. So `--stars` renders over a loopback `http.server`
   (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
   + 303 — no JavaScript. `_Gallery` answers exactly `/`, `/trash`,
-  `/images/Q<n>.jpg`, `/trash/images/Q<n>.jpg`, `POST /unstar/<n>`,
-  `POST /restore/<n>`, `POST /star` and `POST /trash/empty`; everything else
+  `/images/<key>.jpg`, `/trash/images/<key>.jpg`, `POST /unstar/<key>`,
+  `POST /restore/<key>`, `POST /star` and `POST /trash/empty`; everything else
   404s. `POST /star` is the one route that reads a **request body** (the pasted
   link, form-urlencoded) — every other mutation carries its QID in the path. A
   link that won't resolve comes back as a `Flash`, not an error status: it's
@@ -220,7 +245,10 @@ it can be tested without network or `swaymsg`.
   the wallpaper writes. That equivalence is the whole point — a pasted painting is
   indistinguishable from a shown one, so the gallery, trash and archive stay a
   single code path (`test_the_record_matches_what_run_writes_for_the_same_painting`
-  pins it). Every rejection raises `LinkError`, whose message is written to be read
+  pins it). A file with no QID falls to `_record_from_template()`, which builds
+  that identical record out of the Commons `{{Artwork}}` wikitext — same shape,
+  same downstream (`test_a_wikitext_record_is_shaped_like_a_wikidata_one` pins
+  *that*). Every rejection raises `LinkError`, whose message is written to be read
   by whoever pasted the link, so the gallery can show it verbatim instead of
   mapping exception types to prose.
 - `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent

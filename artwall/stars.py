@@ -65,18 +65,22 @@ COLUMN, GAP = 260, 32
 
 # The only paths the gallery server answers. Anything else 404s — it serves the
 # archived paintings, not the filesystem.
-IMAGE_PATH = re.compile(rf"^/{STARS_IMAGE_DIR}/Q(?P<qid>\d+)\.jpg$")
-TRASH_IMAGE_PATH = re.compile(r"^/trash/images/Q(?P<qid>\d+)\.jpg$")
-UNSTAR_PATH = re.compile(r"^/unstar/(?P<qid>\d+)$")
-RESTORE_PATH = re.compile(r"^/restore/(?P<qid>\d+)$")
+# A key is `Q<n>` (a Wikidata painting) or `M<n>` (a Commons file describing one
+# in wikitext only) — see `selection.record`. Matching the prefix rather than bare
+# digits is what keeps the two numbering spaces from colliding in a URL.
+KEY = r"[QM]\d+"
+IMAGE_PATH = re.compile(rf"^/{STARS_IMAGE_DIR}/(?P<key>{KEY})\.jpg$")
+TRASH_IMAGE_PATH = re.compile(rf"^/trash/images/(?P<key>{KEY})\.jpg$")
+UNSTAR_PATH = re.compile(rf"^/unstar/(?P<key>{KEY})$")
+RESTORE_PATH = re.compile(rf"^/restore/(?P<key>{KEY})$")
 
 
 class Flash(NamedTuple):
-    """A one-shot message for the next render. `undo_qid` adds an Undo button."""
+    """A one-shot message for the next render. `undo_key` adds an Undo button."""
 
     verb: str
     title: str = ""
-    undo_qid: int | None = None
+    undo_key: str | None = None
 
 
 class Session:
@@ -216,24 +220,24 @@ def save_trash(config: Config, trashed: list[Trashed]) -> None:
     cache.save_json(config.trash_file, trashed)
 
 
-def in_trash(config: Config, qid: int) -> bool:
-    return any(t["star"]["qid"] == qid for t in load_trash(config))
+def in_trash(config: Config, key: str) -> bool:
+    return any(t["star"]["key"] == key for t in load_trash(config))
 
 
 def toggle(stars: list[Star], star: Star) -> tuple[list[Star], bool]:
-    """Star a painting, or unstar it if it's already there (matched on QID).
+    """Star a painting, or unstar it if it's already there (matched on key).
 
     Returns the new list and whether the painting ends up starred, so the caller
     knows whether to archive the image or delete it.
     """
-    without = [s for s in stars if s["qid"] != star["qid"]]
+    without = [s for s in stars if s["key"] != star["key"]]
     if len(without) < len(stars):
         return without, False
     return [*stars, star], True
 
 
-def is_starred(stars: list[Star], qid: int) -> bool:
-    return any(s["qid"] == qid for s in stars)
+def is_starred(stars: list[Star], key: str) -> bool:
+    return any(s["key"] == key for s in stars)
 
 
 def star(config: Config | None = None, *, output: str) -> bool:
@@ -250,7 +254,7 @@ def star(config: Config | None = None, *, output: str) -> bool:
         raise RuntimeError(f"no painting recorded for output {output!r}")
 
     stars, starred = toggle(load(config), record)
-    image = config.star_image(record["qid"])
+    image = config.star_image(record["key"])
     if starred:
         image.parent.mkdir(parents=True, exist_ok=True)
         url = wikidata.image_url(config.commons_url, record["image"], config.stars_image_width)
@@ -270,17 +274,17 @@ def star_link(config: Config, link: str) -> tuple[Star, str]:
     painting, so pasting one that's already hung says so and changes nothing
     rather than quietly removing it. A painting still in the trash is restored
     (image, position and all) instead of re-downloaded: adding it afresh would
-    leave the trash holding the same QID, and restoring that later would hang a
+    leave the trash holding the same key, and restoring that later would hang a
     second copy. Returns the record and which of the three happened.
     """
     record = app.resolve_link(config, link)
-    qid = record["qid"]
-    if is_starred(load(config), qid):
+    key = record["key"]
+    if is_starred(load(config), key):
         return record, "already"
-    if in_trash(config, qid):
-        return restore(config, qid), "restored"
+    if in_trash(config, key):
+        return restore(config, key), "restored"
 
-    image = config.star_image(qid)
+    image = config.star_image(key)
     image.parent.mkdir(parents=True, exist_ok=True)
     url = wikidata.image_url(config.commons_url, record["image"], config.stars_image_width)
     web.download(url, image)  # archive before saving, as `star()` does
@@ -288,7 +292,7 @@ def star_link(config: Config, link: str) -> tuple[Star, str]:
     return record, "starred"
 
 
-def unstar(config: Config, qid: int) -> Star:
+def unstar(config: Config, key: str) -> Star:
     """Move a painting out of the gallery and into the trash.
 
     Nothing is deleted: the image is *renamed* into `.trash/` and the record is
@@ -296,24 +300,24 @@ def unstar(config: Config, qid: int) -> Star:
     back exactly as they were — now, or after a reboot.
     """
     stars = load(config)
-    index = next(i for i, s in enumerate(stars) if s["qid"] == qid)
+    index = next(i for i, s in enumerate(stars) if s["key"] == key)
     removed = stars.pop(index)
-    trashed = config.trash_image(qid)
+    trashed = config.trash_image(key)
     trashed.parent.mkdir(parents=True, exist_ok=True)
-    config.star_image(qid).replace(trashed)  # a rename: same filesystem, no copy
+    config.star_image(key).replace(trashed)  # a rename: same filesystem, no copy
     save(config, stars)
     save_trash(config, [*load_trash(config), {"index": index, "star": removed}])
     return removed
 
 
-def restore(config: Config, qid: int) -> Star:
+def restore(config: Config, key: str) -> Star:
     """Put a trashed painting back where it was, image and all."""
     trash = load_trash(config)
-    entry = next(t for t in trash if t["star"]["qid"] == qid)
+    entry = next(t for t in trash if t["star"]["key"] == key)
     trash.remove(entry)
-    image = config.star_image(qid)
+    image = config.star_image(key)
     image.parent.mkdir(parents=True, exist_ok=True)
-    config.trash_image(qid).replace(image)
+    config.trash_image(key).replace(image)
     back: Star = entry["star"]
     stars = load(config)
     stars.insert(min(entry["index"], len(stars)), back)  # the list may have shrunk since
@@ -358,9 +362,9 @@ def _flash(flash: Flash) -> str:
     verb = html.escape(flash.verb)
     named = f" <i>{html.escape(flash.title)}</i>" if flash.title else ""
     undo = (
-        f'<form method="post" action="/restore/{flash.undo_qid}">'
+        f'<form method="post" action="/restore/{flash.undo_key}">'
         f'<button type="submit">Undo</button></form>'
-        if flash.undo_qid is not None
+        if flash.undo_key is not None
         else ""
     )
     # A <div>, not a <p>: a paragraph can't contain a form, so browsers close it
@@ -427,8 +431,8 @@ def render_page(
         tiles = [
             _tile(
                 s,
-                f"{STARS_IMAGE_DIR}/Q{s['qid']}.jpg",  # relative: keeps the dir portable
-                _corner(f"/unstar/{s['qid']}", "★", f"Unstar {_label(s)}")
+                f"{STARS_IMAGE_DIR}/{s['key']}.jpg",  # relative: keeps the dir portable
+                _corner(f"/unstar/{s['key']}", "★", f"Unstar {_label(s)}")
                 if interactive
                 else "",
             )
@@ -464,8 +468,8 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
         tiles = [
             _tile(
                 t["star"],
-                f"/trash/images/Q{t['star']['qid']}.jpg",
-                _corner(f"/restore/{t['star']['qid']}", "⤺", f"Restore {_label(t['star'])}"),
+                f"/trash/images/{t['star']['key']}.jpg",
+                _corner(f"/restore/{t['star']['key']}", "⤺", f"Restore {_label(t['star'])}"),
                 classes="trashed",
             )
             for t in reversed(trashed)
@@ -548,10 +552,11 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
         elif self.path == "/trash":
             self._html(render_trash(load_trash(self.config), self.session.take_flash()))
         elif image:
-            self._send(200, "image/jpeg", self.config.star_image(int(image["qid"])).read_bytes())
+            self._send(200, "image/jpeg", self.config.star_image(image["key"]).read_bytes())
         elif trash_image:
-            qid = int(trash_image["qid"])
-            self._send(200, "image/jpeg", self.config.trash_image(qid).read_bytes())
+            self._send(
+                200, "image/jpeg", self.config.trash_image(trash_image["key"]).read_bytes()
+            )
         else:
             self._not_found()
 
@@ -575,11 +580,11 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
         restore_match = RESTORE_PATH.match(self.path)
         if self.path == "/star":
             self.session.flash = self._add_link()
-        elif unstar_match and is_starred(load(self.config), int(unstar_match["qid"])):
-            removed = unstar(self.config, int(unstar_match["qid"]))
-            self.session.flash = Flash("Removed", removed["title"], removed["qid"])
-        elif restore_match and in_trash(self.config, int(restore_match["qid"])):
-            back = restore(self.config, int(restore_match["qid"]))
+        elif unstar_match and is_starred(load(self.config), unstar_match["key"]):
+            removed = unstar(self.config, unstar_match["key"])
+            self.session.flash = Flash("Removed", removed["title"], removed["key"])
+        elif restore_match and in_trash(self.config, restore_match["key"]):
+            back = restore(self.config, restore_match["key"])
             self.session.flash = Flash("Restored", back["title"])
         elif self.path == "/trash/empty":
             count = empty_trash(self.config)

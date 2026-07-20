@@ -335,5 +335,108 @@ class IsPainting(unittest.TestCase):
         self.assertFalse(wikidata.is_painting(self._result({"P31": [{"mainsnak": {}}]}), "Q42"))
 
 
+class ArtworkTemplate(unittest.TestCase):
+    """The Commons wikitext fallback, for files whose artwork has no Wikidata item.
+
+    The fixture is the real `{{Artwork}}` block from
+    `File:Willard_Leroy_Metcalf_Cornish_Hills.jpg` — the file this path was built
+    for — trimmed to the fields that are read. Note its `|wikidata =` is empty:
+    that is precisely why structured data has nothing and this parser exists.
+    """
+
+    METCALF = (
+        "== {{int:filedesc}} ==\n"
+        "{{Artwork\n"
+        "|wikidata = \n"
+        " |artist           = {{Creator:Willard Leroy Metcalf}}\n"
+        " |title            = {{title|en=Cornish Hills|de=Die Hügel von Cornish}}\n"
+        " |description      = \n"
+        " |date             = 1911\n"
+        "|object type = painting \n"
+        " |medium           = {{technique|Oil|canvas}}\n"
+        " |institution      = {{Institution:Private collection}}, Thomas W. Barwick\n"
+        "}}\n\n=={{int:license-header}}==\n{{PD-Art|PD-old-auto-1923|deathyear=1925}}"
+    )
+
+    def test_reads_artist_title_and_date(self):
+        self.assertEqual(
+            wikidata.parse_artwork_template(self.METCALF, "en"),
+            {"artist": "Willard Leroy Metcalf", "title": "Cornish Hills", "date": "1911"},
+        )
+
+    def test_the_title_follows_the_caption_language(self):
+        parsed = wikidata.parse_artwork_template(self.METCALF, "de")
+        self.assertEqual(parsed["title"], "Die Hügel von Cornish")
+
+    def test_an_absent_language_falls_back_to_the_first_title(self):
+        # better a title in the wrong language than an untitled painting
+        parsed = wikidata.parse_artwork_template(self.METCALF, "fr")
+        self.assertEqual(parsed["title"], "Cornish Hills")
+
+    def test_a_positional_title_template(self):
+        wikitext = "{{Artwork|object type=painting|title={{title|Cornish Hills}}|artist=X}}"
+        self.assertEqual(wikidata.parse_artwork_template(wikitext, "en")["title"], "Cornish Hills")
+
+    def test_a_plain_text_field_needs_no_template(self):
+        wikitext = "{{Artwork|object type=painting|title=Cornish Hills|artist=W. Metcalf}}"
+        parsed = wikidata.parse_artwork_template(wikitext, "en")
+        self.assertEqual((parsed["artist"], parsed["title"]), ("W. Metcalf", "Cornish Hills"))
+
+    def test_a_linked_artist_unwraps_to_the_label(self):
+        wikitext = "{{Artwork|object type=painting|artist=[[:en:Willard Metcalf|Metcalf]]|title=X}}"
+        self.assertEqual(wikidata.parse_artwork_template(wikitext, "en")["artist"], "Metcalf")
+
+    def test_a_pipe_inside_a_link_does_not_split_the_parameters(self):
+        # the reason `_split_params` tracks bracket depth instead of str.split
+        wikitext = "{{Artwork|artist=[[Foo|Bar]]|object type=painting|title=Kept}}"
+        parsed = wikidata.parse_artwork_template(wikitext, "en")
+        self.assertEqual((parsed["artist"], parsed["title"]), ("Bar", "Kept"))
+
+    def test_a_template_date_yields_no_date_rather_than_a_wrong_one(self):
+        wikitext = "{{Artwork|object type=painting|title=X|date={{other date|circa|1911}}}}"
+        self.assertEqual(wikidata.parse_artwork_template(wikitext, "en")["date"], "")
+
+    def test_none_when_the_page_has_no_artwork_template(self):
+        self.assertIsNone(
+            wikidata.parse_artwork_template("{{Information|author=Somebody}}", "en")
+        )
+
+    def test_none_when_the_object_is_not_a_painting(self):
+        # the stand-in for the P31 guard: a photograph must not be archived as art
+        wikitext = "{{Artwork|object type=photograph|title=A snapshot|artist=X}}"
+        self.assertIsNone(wikidata.parse_artwork_template(wikitext, "en"))
+
+    def test_none_when_the_object_type_is_absent(self):
+        self.assertIsNone(wikidata.parse_artwork_template("{{Artwork|title=X}}", "en"))
+
+    def test_a_longer_template_name_is_not_mistaken_for_artwork(self):
+        self.assertIsNone(
+            wikidata.parse_artwork_template("{{Artworks|object type=painting}}", "en")
+        )
+
+    def test_an_unterminated_template_is_not_a_description(self):
+        self.assertIsNone(wikidata.parse_artwork_template("{{Artwork|object type=paint", "en"))
+
+    def test_a_painting_template_is_read_too(self):
+        self.assertEqual(
+            wikidata.parse_artwork_template("{{Painting|object type=painting|title=X}}", "en"),
+            {"artist": "", "title": "X", "date": ""},
+        )
+
+
+class FilePageUrl(unittest.TestCase):
+    def test_builds_the_commons_description_page(self):
+        self.assertEqual(
+            wikidata.file_page_url("https://commons.wikimedia.org/wiki/", "File:A painting.jpg"),
+            "https://commons.wikimedia.org/wiki/File:A_painting.jpg",
+        )
+
+    def test_escapes_everything_but_the_namespace_colon(self):
+        self.assertEqual(
+            wikidata.file_page_url("https://commons.wikimedia.org/wiki/", "File:Hügel & co.jpg"),
+            "https://commons.wikimedia.org/wiki/File:H%C3%BCgel_%26_co.jpg",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

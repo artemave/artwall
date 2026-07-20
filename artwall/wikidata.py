@@ -6,6 +6,7 @@ unit-testable.
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 from typing import Any
 
@@ -18,6 +19,29 @@ PAINTING = f"wd:{PAINTING_QID}"
 # files carry only P180, so it can't be skipped; what makes it safe is that the
 # resolved entity is checked with `is_painting()` before anything is starred.
 DEPICTED_ARTWORK = ("P6243", "P180")
+
+# The Commons *wikitext* fallback, for files that describe their artwork only in
+# an `{{Artwork}}` template and never had it copied into structured data (the
+# template's own `|wikidata =` field is what would have linked one, and on plenty
+# of real files it is simply blank). This is a strictly worse source than SDC —
+# free text, no QIDs, no guarantees — so `parse_artwork_qid` is always tried
+# first and this only runs when it finds nothing.
+ARTWORK_TEMPLATES = ("artwork", "painting")
+
+# Templates that wrap a plain name: `{{Creator:Willard Leroy Metcalf}}`. The
+# trailing colon is part of the page title, which is why they're matched
+# separately from the pipe-separated templates below.
+NAMED_TEMPLATES = ("creator:", "institution:")
+
+# `{{title|en=Cornish Hills|de=Die Hügel von Cornish}}` — a per-language value.
+TITLE_TEMPLATE = "title"
+
+# `object type = painting` is the wikitext stand-in for `P31 = Q3305213`. It is
+# free text rather than a QID, so it's a weaker guard than `is_painting()` — but
+# it is the only claim the file makes about what it shows, and refusing to read
+# it would reject every correctly-described painting on this path.
+OBJECT_TYPE = "object type"
+PAINTING_TYPE = "painting"
 
 # Both link shapes Wikipedia hands out for an image carry the file here:
 #   .../wiki/Muqi#/media/File:Mu-ch'i_001.jpg   (the media viewer, in the fragment)
@@ -196,6 +220,140 @@ def is_painting(result: dict[str, Any], entity_id: str) -> bool:
         (statement["mainsnak"].get("datavalue") or {}).get("value", {}).get("id") == PAINTING_QID
         for statement in claims
     )
+
+
+def _split_params(body: str) -> list[str]:
+    """A template body's top-level `|`-separated parts.
+
+    Nested templates and wiki links carry pipes of their own (`{{title|en=…}}`,
+    `[[Foo|Bar]]`), so a plain `str.split("|")` would shred them — the depth of
+    both bracket kinds has to be tracked.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth = index = 0
+    while index < len(body):
+        pair = body[index : index + 2]
+        if pair in ("{{", "[["):
+            depth += 1
+        elif pair in ("}}", "]]"):
+            depth -= 1
+        else:
+            if body[index] == "|" and depth == 0:
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(body[index])
+            index += 1
+            continue
+        current.append(pair)
+        index += 2
+    parts.append("".join(current))
+    return parts
+
+
+def _template_body(wikitext: str, names: tuple[str, ...]) -> str | None:
+    """Everything between `{{Name` and its matching `}}`, for the first name that
+    occurs, or None. Brace-matched rather than regexed, since these templates nest."""
+    lowered = wikitext.lower()
+    for name in names:
+        start = lowered.find("{{" + name)
+        if start == -1:
+            continue
+        after = start + 2 + len(name)
+        # `{{Artworks}}` is not `{{Artwork}}`. A name ending in ":" is a page-title
+        # prefix (`{{Creator:Someone}}`), where a following letter is the point.
+        if not name.endswith(":") and after < len(wikitext) and wikitext[after].isalnum():
+            continue
+        depth = 0
+        index = start
+        while index < len(wikitext) - 1:
+            pair = wikitext[index : index + 2]
+            if pair == "{{":
+                depth += 1
+            elif pair == "}}":
+                depth -= 1
+                if depth == 0:
+                    return wikitext[after:index]
+            else:
+                index += 1
+                continue
+            index += 2
+    return None
+
+
+def _params(body: str) -> dict[str, str]:
+    """`name = value` pairs from a template body, names lowercased and despaced.
+
+    Positional (unnamed) parameters are dropped: every field this reads is named.
+    """
+    params = {}
+    for part in _split_params(body):
+        name, sep, value = part.partition("=")
+        if sep:
+            params[" ".join(name.split()).lower()] = value.strip()
+    return params
+
+
+def _plain(wikitext: str) -> str:
+    """Wikitext reduced to display text: links unwrapped, leftover markup dropped."""
+    text = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", wikitext)  # [[Foo|Bar]] -> Bar
+    text = re.sub(r"\[\[([^\]]*)\]\]", r"\1", text)  # [[Foo]] -> Foo
+    text = re.sub(r"\[[^\s\]]+\s+([^\]]*)\]", r"\1", text)  # [http://x Label] -> Label
+    text = re.sub(r"\{\{[^{}]*\}\}", " ", text)  # an unrecognised template says nothing
+    text = re.sub(r"<[^>]+>", "", text)
+    return " ".join(text.split())
+
+
+def _value(wikitext: str, language: str) -> str:
+    """One `{{Artwork}}` field as display text.
+
+    `{{title|en=…|de=…}}` picks the caption language; `{{Creator:Name}}` and
+    friends unwrap to the name; anything else falls through to plain text.
+    """
+    body = _template_body(wikitext, (TITLE_TEMPLATE,))
+    if body is not None:
+        params = _params(body)
+        if params:
+            return _plain(params.get(language) or next(iter(params.values())))
+        return _plain(_split_params(body)[-1])  # {{title|Cornish Hills}}
+    body = _template_body(wikitext, NAMED_TEMPLATES)
+    return _plain(body if body is not None else wikitext)
+
+
+def parse_artwork_template(
+    wikitext: str, language: str
+) -> dict[str, str] | None:
+    """Artist/title/date from a Commons file's `{{Artwork}}` template.
+
+    None if the page has no such template, or if it doesn't say the object is a
+    painting — that check stands in for `is_painting()` on this path, and without
+    it a pasted photograph would be archived as art.
+
+    Only a plain-text `date` is read. Commons also writes dates as templates
+    (`{{other date|circa|1911}}`), which reduce to "" here and leave the painting
+    captioned without a year rather than with a wrong one.
+    """
+    body = _template_body(wikitext, ARTWORK_TEMPLATES)
+    if body is None:
+        return None
+    params = _params(body)
+    if PAINTING_TYPE not in _plain(params.get(OBJECT_TYPE, "")).lower():
+        return None
+    return {
+        "artist": _value(params.get("artist", ""), language),
+        "title": _value(params.get("title", ""), language),
+        "date": _value(params.get("date", ""), language),
+    }
+
+
+def file_page_url(commons_file_url: str, title: str) -> str:
+    """The Commons description page for a file title — the article link for a
+    painting that has no Wikidata item, and so no Wikipedia article either.
+
+    The `File:` colon is left unescaped — it's a namespace separator in the page
+    title, and percent-encoding it gives a URL Commons doesn't resolve."""
+    return commons_file_url + urllib.parse.quote(title.replace(" ", "_"), safe=":")
 
 
 def image_url(commons_url: str, filename: str, width: int) -> str:

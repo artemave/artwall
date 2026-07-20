@@ -204,7 +204,7 @@ def resolve_link(config: Config, link: str) -> dict[str, Any]:
     )
     qid = wikidata.parse_artwork_qid(structured, media_id)
     if qid is None:
-        raise LinkError(f"{title} isn't linked to a painting on Wikidata")
+        return _record_from_template(config, title, media_id)
 
     entity = _get_entity(config, f"Q{qid}", "claims|labels")
     if not wikidata.is_painting(entity, f"Q{qid}"):
@@ -214,7 +214,40 @@ def resolve_link(config: Config, link: str) -> dict[str, Any]:
     if painting is None:
         raise LinkError(f"Q{qid} has no image on Wikidata")
     painting["artist"] = _artist(config, painting["creator_qid"])
-    return selection.record(qid, painting, _wiki_url(config, qid, painting["creator_qid"]))
+    return selection.record(
+        f"Q{qid}", painting, _wiki_url(config, qid, painting["creator_qid"])
+    )
+
+
+def _record_from_template(config: Config, title: str, media_id: str) -> dict[str, Any]:
+    """The same record, for a file whose artwork exists only in its wikitext.
+
+    Plenty of Commons scans describe the painting fully in an `{{Artwork}}`
+    template — artist, title, date, "object type = painting" — while their
+    structured data carries nothing but MIME type and pixel dimensions, and the
+    template's own `|wikidata =` field sits empty. There is no QID to resolve and
+    often no Wikidata item to resolve it to, so the file itself becomes the
+    painting's identity: `M<pageid>`, and the Commons description page as its link.
+
+    Everything downstream is unchanged, which is the point — the gallery, the
+    trash and the archive still see one kind of record.
+    """
+    parsed = web.get_json(
+        config.commons_api_url,
+        {"action": "parse", "page": title, "prop": "wikitext", "format": "json"},
+    )
+    described = wikidata.parse_artwork_template(
+        parsed["parse"]["wikitext"]["*"], config.language
+    )
+    if described is None:
+        raise LinkError(
+            f"{title} isn't linked to a painting on Wikidata, and its Commons page "
+            "doesn't describe one either"
+        )
+    painting = {**described, "image": title.removeprefix(wikidata.FILE_PREFIX)}
+    return selection.record(
+        media_id, painting, wikidata.file_page_url(config.commons_file_url, title)
+    )
 
 
 def parse_outputs(raw: str) -> list[Output]:
@@ -403,7 +436,7 @@ def run(
                 # and — if you click the star — record it without another lookup.
                 cache.save_json(
                     config.caption_file(output.name),
-                    selection.record(rendered.qid, rendered.painting, rendered.url),
+                    selection.record(f"Q{rendered.qid}", rendered.painting, rendered.url),
                 )
 
         config.stamp.touch()

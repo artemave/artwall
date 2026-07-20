@@ -15,15 +15,22 @@ def caption(painting: dict[str, Any]) -> str:
     return f"{artist} — {title} {date}".strip()
 
 
-def record(qid: int, painting: dict[str, str], url: str) -> dict[str, Any]:
+def record(key: str, painting: dict[str, str], url: str) -> dict[str, Any]:
     """A painting reduced to what the overlay and the star gallery need.
 
     `run()` writes this as `caption-<output>.json`; starring copies it verbatim
     into the star list. It carries the image filename and the link, so neither
     the overlay nor the gallery has to go back to Wikidata to draw a painting.
+
+    `key` is the painting's identity, and it is namespaced because paintings now
+    arrive from two places: `Q<n>` for a Wikidata item (the wallpaper, and any
+    pasted link whose file names its artwork in structured data), `M<n>` for a
+    Commons page whose artwork exists only in an `{{Artwork}}` template and has
+    no Wikidata item at all. The two numbering spaces overlap, so an unprefixed
+    int would silently collide — the same key naming two different paintings.
     """
     return {
-        "qid": qid,
+        "key": key,
         "artist": painting["artist"],
         "title": painting["title"],
         "date": painting["date"],

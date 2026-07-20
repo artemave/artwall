@@ -30,6 +30,10 @@ COMMONS_URL = "https://commons.wikimedia.org/wiki/Special:FilePath/"
 # pasted image link starts at the *file*, and only Commons knows which Wikidata
 # item that file depicts (its structured data).
 COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php"
+# Commons file *description* pages. The article link for a painting that reached
+# the gallery through the wikitext fallback: it has no Wikidata item, so there is
+# no Wikipedia article and no `entity_url()` to fall back to either.
+COMMONS_FILE_URL = "https://commons.wikimedia.org/wiki/"
 IDS_TTL = 30 * 24 * 60 * 60  # the painting catalogue rarely changes; refetch monthly
 
 # Throttle for event-driven runs: with --throttle, a run is a no-op if the last
@@ -81,6 +85,7 @@ class Config:
     api_url: str = API_URL
     commons_url: str = COMMONS_URL
     commons_api_url: str = COMMONS_API_URL
+    commons_file_url: str = COMMONS_FILE_URL
     ids_ttl: int = IDS_TTL
     # content filters (all optional). dates are inception years (negative = BC);
     # the rest are lists of Wikidata QIDs — find them with `--find` or wikidata.org.
@@ -168,10 +173,11 @@ class Config:
         images it links to so the directory stays portable."""
         return self.data_dir / "stars.html"
 
-    def star_image(self, qid: int) -> Path:
-        """The archived painting for a starred QID. Always `.jpg`: Commons renders
-        a JPEG thumbnail for anything it downscales, and browsers sniff the rest."""
-        return self.data_dir / STARS_IMAGE_DIR / f"Q{qid}.jpg"
+    def star_image(self, key: str) -> Path:
+        """The archived painting for a star key (`Q<n>` or `M<n>` — see
+        `selection.record`). Always `.jpg`: Commons renders a JPEG thumbnail for
+        anything it downscales, and browsers sniff the rest."""
+        return self.data_dir / STARS_IMAGE_DIR / f"{key}.jpg"
 
     @property
     def trash_dir(self) -> Path:
@@ -183,10 +189,10 @@ class Config:
         Beside their images, so emptying the trash is one `rmtree`."""
         return self.trash_dir / "trash.json"
 
-    def trash_image(self, qid: int) -> Path:
-        """Where `star_image(qid)` is parked when unstarred, so restoring returns the
+    def trash_image(self, key: str) -> Path:
+        """Where `star_image(key)` is parked when unstarred, so restoring returns the
         exact bytes rather than re-downloading them. Same filesystem, so it's a rename."""
-        return self.trash_dir / f"Q{qid}.jpg"
+        return self.trash_dir / f"{key}.jpg"
 
     @property
     def stars_pid(self) -> Path:

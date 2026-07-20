@@ -123,7 +123,7 @@ class Caption:
         self.path = config.caption_file(name)
         self.font = font
         self.url: str | None = None
-        self.qid: int | None = None
+        self.key: str | None = None
 
         # the caption text — clicking it opens the painting's Wikipedia article
         self.label = Gtk.Label()
@@ -250,8 +250,8 @@ class Caption:
     def _show_star_state(self) -> None:
         """Point the star icon at the truth on disk — filled if this display's
         painting is in the gallery, hollow if not."""
-        starred = self.qid is not None and stars.is_starred(
-            stars.load(self.config), self.qid
+        starred = self.key is not None and stars.is_starred(
+            stars.load(self.config), self.key
         )
         name = "starred-symbolic" if starred else "non-starred-symbolic"
         self.star_icon.set_from_icon_name(name, Gtk.IconSize.MENU)
@@ -272,7 +272,7 @@ class Caption:
             self.window.hide()
             return
         self.url = data["url"]
-        self.qid = data["qid"]
+        self.key = data["key"]
         text = GLib.markup_escape_text(selection.caption(data))
         self.label.set_markup(f'<span font_desc="{self.font}">{text}</span>')
         self._show_star_state()  # a new painting is (almost always) not yet starred

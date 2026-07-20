@@ -30,9 +30,13 @@ from tests.test_app import (
 
 
 def star_of(qid, **overrides):
-    """A star record shaped exactly as `selection.record()` builds it."""
+    """A star record shaped exactly as `selection.record()` builds it.
+
+    Takes the bare number and namespaces it, since most stars come from Wikidata;
+    pass `key=` to build a Commons-derived one (`M<pageid>`).
+    """
     return {
-        "qid": qid,
+        "key": f"Q{qid}",
         "artist": "Rembrandt",
         "title": f"Painting {qid}",
         "date": "1642",
@@ -46,16 +50,16 @@ class Toggle(unittest.TestCase):
     def test_adds_a_new_painting(self):
         result, starred = stars.toggle([], star_of(101))
         self.assertTrue(starred)
-        self.assertEqual([s["qid"] for s in result], [101])
+        self.assertEqual([s["key"] for s in result], ["Q101"])
 
     def test_appends_so_the_list_stays_oldest_first(self):
         result, _ = stars.toggle([star_of(101)], star_of(102))
-        self.assertEqual([s["qid"] for s in result], [101, 102])
+        self.assertEqual([s["key"] for s in result], ["Q101", "Q102"])
 
     def test_removes_a_painting_that_is_already_starred(self):
         result, starred = stars.toggle([star_of(101), star_of(102)], star_of(101))
         self.assertFalse(starred)
-        self.assertEqual([s["qid"] for s in result], [102])
+        self.assertEqual([s["key"] for s in result], ["Q102"])
 
     def test_matches_on_qid_not_identity(self):
         # the record the overlay hands back is re-read from disk, so it's a distinct
@@ -65,8 +69,8 @@ class Toggle(unittest.TestCase):
         self.assertEqual(result, [])
 
     def test_is_starred(self):
-        self.assertTrue(stars.is_starred([star_of(101)], 101))
-        self.assertFalse(stars.is_starred([star_of(101)], 102))
+        self.assertTrue(stars.is_starred([star_of(101)], "Q101"))
+        self.assertFalse(stars.is_starred([star_of(101)], "Q102"))
 
 
 class RenderPage(unittest.TestCase):
@@ -107,7 +111,7 @@ class RenderPage(unittest.TestCase):
     def test_unstar_buttons_only_when_interactive(self):
         self.assertNotIn("/unstar/", stars.render_page([star_of(101)]))
         served = stars.render_page([star_of(101)], interactive=True)
-        self.assertIn('<form class="corner" method="post" action="/unstar/101">', served)
+        self.assertIn('<form class="corner" method="post" action="/unstar/Q101">', served)
 
     def test_the_unstar_button_is_labelled_for_screen_readers(self):
         served = stars.render_page([star_of(101, title="The Night Watch")], interactive=True)
@@ -131,10 +135,10 @@ class RenderPage(unittest.TestCase):
         self.assertNotIn("/trash", page)
 
     def test_the_undo_banner_names_the_painting_and_posts_back(self):
-        flash = stars.Flash("Removed", "Painting 101", 101)
+        flash = stars.Flash("Removed", "Painting 101", "Q101")
         page = stars.render_page([star_of(102)], interactive=True, flash=flash)
         self.assertIn("Removed <i>Painting 101</i>.", page)
-        self.assertIn('<form method="post" action="/restore/101">', page)
+        self.assertIn('<form method="post" action="/restore/Q101">', page)
 
     def test_a_flash_without_an_undo_has_no_button(self):
         flash = stars.Flash("Deleted 2 paintings for good")
@@ -149,7 +153,7 @@ class RenderPage(unittest.TestCase):
         # A <p> can't contain a <form>: the browser closes the paragraph early and
         # hoists the form out as a sibling, dropping it out of the banner's flex row.
         # Substring assertions can't see this — only a real HTML parser can.
-        flash = stars.Flash("Removed", "Painting 102", 102)
+        flash = stars.Flash("Removed", "Painting 102", "Q102")
         pages = [
             stars.render_page([star_of(101)], interactive=True, flash=flash),
             stars.render_page([], interactive=True, flash=flash),
@@ -162,9 +166,9 @@ class RenderPage(unittest.TestCase):
 
     def test_trashing_the_last_star_leaves_an_empty_gallery_with_a_banner(self):
         # the empty-state copy and the undo offer have to coexist
-        page = stars.render_page([], interactive=True, flash=stars.Flash("Removed", "X", 101))
+        page = stars.render_page([], interactive=True, flash=stars.Flash("Removed", "X", "Q101"))
         self.assertIn("Nothing starred yet", page)
-        self.assertIn('action="/restore/101"', page)
+        self.assertIn('action="/restore/Q101"', page)
 
 
 class RenderTrash(unittest.TestCase):
@@ -179,7 +183,7 @@ class RenderTrash(unittest.TestCase):
     def test_lists_trashed_paintings_with_restore_buttons(self):
         page = stars.render_trash(self.trashed(101, 102))
         self.assertIn("2 paintings in the trash", page)
-        self.assertIn('action="/restore/101"', page)
+        self.assertIn('action="/restore/Q101"', page)
         self.assertIn('aria-label="Restore Painting 102"', page)
 
     def test_trash_images_are_served_absolutely_not_relatively(self):
@@ -242,10 +246,10 @@ class StarTests(unittest.TestCase):
             starred = stars.star(cfg, output="DP-1")
 
         self.assertTrue(starred)
-        self.assertEqual([s["qid"] for s in stars.load(cfg)], [qid])
+        self.assertEqual([s["key"] for s in stars.load(cfg)], [f"Q{qid}"])
         # the painting itself is archived beside the list, ready to be backed up
-        self.assertEqual(cfg.star_image(qid).read_bytes(), IMAGE_BYTES)
-        self.assertEqual(cfg.star_image(qid), self.data_dir / "images" / f"Q{qid}.jpg")
+        self.assertEqual(cfg.star_image(f"Q{qid}").read_bytes(), IMAGE_BYTES)
+        self.assertEqual(cfg.star_image(f"Q{qid}"), self.data_dir / "images" / f"Q{qid}.jpg")
 
     def test_archives_at_the_configured_width(self):
         router = wikidata_router([101])
@@ -270,7 +274,7 @@ class StarTests(unittest.TestCase):
 
         self.assertFalse(starred)
         self.assertEqual(stars.load(cfg), [])
-        self.assertFalse(cfg.star_image(qid).exists())
+        self.assertFalse(cfg.star_image(f"Q{qid}").exists())
 
     def test_stars_survive_wiping_the_cache(self):
         # the whole reason stars live under data_dir: `rm -rf ~/.cache/artwall` is
@@ -285,8 +289,8 @@ class StarTests(unittest.TestCase):
         for path in self.cache_dir.iterdir():
             path.unlink()
 
-        self.assertEqual([s["qid"] for s in stars.load(cfg)], [qid])
-        self.assertTrue(cfg.star_image(qid).exists())
+        self.assertEqual([s["key"] for s in stars.load(cfg)], [f"Q{qid}"])
+        self.assertTrue(cfg.star_image(f"Q{qid}").exists())
 
     def test_unknown_output_fails_loudly(self):
         cfg = Config(cache_dir=self.cache_dir, data_dir=self.data_dir)
@@ -335,9 +339,9 @@ class ServeGallery(unittest.TestCase):
         # cache_dir too, never the default: serve_gallery() writes stars.pid there
         # and signals whatever it names — the developer's own gallery, otherwise.
         self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=self.data_dir)
-        self.cfg.star_image(101).parent.mkdir(parents=True, exist_ok=True)
-        self.cfg.star_image(101).write_bytes(IMAGE_BYTES)
-        self.cfg.star_image(102).write_bytes(IMAGE_BYTES)
+        self.cfg.star_image("Q101").parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.star_image("Q101").write_bytes(IMAGE_BYTES)
+        self.cfg.star_image("Q102").write_bytes(IMAGE_BYTES)
         stars.save(self.cfg, [star_of(101), star_of(102)])
 
         self.runner = Recorder()
@@ -375,8 +379,8 @@ class ServeGallery(unittest.TestCase):
         status, body = self.get("/")
         page = body.decode()
         self.assertEqual(status, 200)
-        self.assertIn('action="/unstar/101"', page)
-        self.assertIn('action="/unstar/102"', page)
+        self.assertIn('action="/unstar/Q101"', page)
+        self.assertIn('action="/unstar/Q102"', page)
 
     def test_serves_the_archived_paintings(self):
         status, body = self.get("/images/Q101.jpg")
@@ -384,95 +388,95 @@ class ServeGallery(unittest.TestCase):
         self.assertEqual(body, IMAGE_BYTES)
 
     def test_unstarring_trashes_the_painting_and_redirects_to_a_clean_url(self):
-        status, location = self.post("/unstar/101")
+        status, location = self.post("/unstar/Q101")
 
         self.assertEqual(status, 303)  # so a reload can't repeat the post
         self.assertEqual(location, "/")  # no ?removed= left in the address bar
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [102])
-        self.assertFalse(self.cfg.star_image(101).exists())
-        self.assertTrue(self.cfg.star_image(102).exists())  # the other one is untouched
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q102"])
+        self.assertFalse(self.cfg.star_image("Q101").exists())
+        self.assertTrue(self.cfg.star_image("Q102").exists())  # the other one is untouched
         # nothing is deleted: the image is parked and the record remembers its place
-        self.assertEqual(self.cfg.trash_image(101).read_bytes(), IMAGE_BYTES)
+        self.assertEqual(self.cfg.trash_image("Q101").read_bytes(), IMAGE_BYTES)
         self.assertEqual(stars.load_trash(self.cfg), [{"index": 0, "star": star_of(101)}])
 
     def test_the_undo_banner_is_a_flash_shown_once(self):
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         _status, first = self.get("/")
         _status, second = self.get("/")
 
-        self.assertIn('action="/restore/101"', first.decode())  # offered on the next render
+        self.assertIn('action="/restore/Q101"', first.decode())  # offered on the next render
         self.assertNotIn('class="flash"', second.decode())  # never again — reload is clean
 
     def test_fetching_a_thumbnail_does_not_swallow_the_flash(self):
         # the browser fetches images right after the page; only a page consumes the flash
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         self.get("/images/Q102.jpg")
         _status, body = self.get("/")
-        self.assertIn('action="/restore/101"', body.decode())
+        self.assertIn('action="/restore/Q101"', body.decode())
 
     def test_restore_still_works_from_a_page_whose_flash_is_spent(self):
         # you loaded the banner, then reloaded elsewhere; the button must still work
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         self.get("/")  # consumes the flash
         self.get("/")  # banner gone from the UI
-        self.post("/restore/101")  # ...but the stale page's button still posts
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101, 102])
+        self.post("/restore/Q101")  # ...but the stale page's button still posts
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101", "Q102"])
 
     def test_restore_returns_the_painting_its_image_and_its_position(self):
-        self.post("/unstar/101")  # 101 was first in the list
-        status, location = self.post("/restore/101")
+        self.post("/unstar/Q101")  # 101 was first in the list
+        status, location = self.post("/restore/Q101")
 
         self.assertEqual(status, 303)
         self.assertEqual(location, "/")
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101, 102])  # order kept
-        self.assertEqual(self.cfg.star_image(101).read_bytes(), IMAGE_BYTES)
-        self.assertFalse(self.cfg.trash_image(101).exists())  # moved back out of the trash
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101", "Q102"])  # order kept
+        self.assertEqual(self.cfg.star_image("Q101").read_bytes(), IMAGE_BYTES)
+        self.assertFalse(self.cfg.trash_image("Q101").exists())  # moved back out of the trash
         self.assertEqual(stars.load_trash(self.cfg), [])
 
     def test_restoring_replaces_the_pending_undo_with_its_own_flash(self):
-        self.post("/unstar/101")
-        self.post("/restore/101")  # before the banner was ever rendered
+        self.post("/unstar/Q101")
+        self.post("/restore/Q101")  # before the banner was ever rendered
         _status, body = self.get("/")
         page = body.decode()
         self.assertIn("Restored <i>Painting 101</i>.", page)
-        self.assertNotIn('action="/restore/101"', page.split("</div>")[0])  # no stale undo
+        self.assertNotIn('action="/restore/Q101"', page.split("</div>")[0])  # no stale undo
 
     def test_a_painting_can_only_be_restored_once(self):
-        self.post("/unstar/101")
-        self.post("/restore/101")
-        status, _location = self.post("/restore/101")  # no longer in the trash
+        self.post("/unstar/Q101")
+        self.post("/restore/Q101")
+        status, _location = self.post("/restore/Q101")  # no longer in the trash
         self.assertEqual(status, 404)
 
     def test_unstarring_a_painting_that_is_not_starred_is_not_found(self):
-        status, _location = self.post("/unstar/999")
+        status, _location = self.post("/unstar/Q999")
         self.assertEqual(status, 404)
 
     def test_restore_after_a_second_unstar_still_returns_the_right_one(self):
-        self.post("/unstar/101")
-        self.post("/unstar/102")
-        self.post("/restore/101")
+        self.post("/unstar/Q101")
+        self.post("/unstar/Q102")
+        self.post("/restore/Q101")
 
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101])
-        self.assertTrue(self.cfg.star_image(101).exists())
-        self.assertFalse(self.cfg.star_image(102).exists())  # still trashed
-        self.assertEqual([t["star"]["qid"] for t in stars.load_trash(self.cfg)], [102])
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101"])
+        self.assertTrue(self.cfg.star_image("Q101").exists())
+        self.assertFalse(self.cfg.star_image("Q102").exists())  # still trashed
+        self.assertEqual([t["star"]["key"] for t in stars.load_trash(self.cfg)], ["Q102"])
 
     def test_unstarring_updates_the_archived_page_too(self):
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         self.assertNotIn("Q101.jpg", self.cfg.stars_page.read_text())
-        self.post("/restore/101")
+        self.post("/restore/Q101")
         self.assertIn("Q101.jpg", self.cfg.stars_page.read_text())
 
     def test_serves_the_trash_page_with_restore_buttons(self):
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         _status, body = self.get("/trash")
         page = body.decode()
         self.assertIn("1 painting in the trash", page)
-        self.assertIn('action="/restore/101"', page)
+        self.assertIn('action="/restore/Q101"', page)
         self.assertIn('<img src="/trash/images/Q101.jpg"', page)
 
     def test_serves_trashed_images(self):
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         status, body = self.get("/trash/images/Q101.jpg")
         self.assertEqual(status, 200)
         self.assertEqual(body, IMAGE_BYTES)
@@ -480,14 +484,14 @@ class ServeGallery(unittest.TestCase):
     def test_the_gallery_links_to_the_trash_once_it_has_something(self):
         _status, before = self.get("/")
         self.assertNotIn('href="/trash"', before.decode())
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         self.get("/")  # burn the flash so it doesn't confuse the assertion
         _status, after = self.get("/")
         self.assertIn('<a href="/trash">Trash (1 painting)</a>', after.decode())
 
     def test_emptying_the_trash_deletes_everything_in_it(self):
-        self.post("/unstar/101")
-        self.post("/unstar/102")
+        self.post("/unstar/Q101")
+        self.post("/unstar/Q102")
         status, location = self.post("/trash/empty")
 
         self.assertEqual(status, 303)
@@ -495,12 +499,12 @@ class ServeGallery(unittest.TestCase):
         self.assertFalse(self.cfg.trash_dir.exists())
         self.assertEqual(stars.load_trash(self.cfg), [])
         self.assertEqual(stars.load(self.cfg), [])  # they were unstarred, and now gone
-        status, _location = self.post("/restore/101")
+        status, _location = self.post("/restore/Q101")
         self.assertEqual(status, 404)  # nothing left to restore
 
     def test_emptying_the_trash_says_how_many_it_deleted(self):
-        self.post("/unstar/101")
-        self.post("/unstar/102")
+        self.post("/unstar/Q101")
+        self.post("/unstar/Q102")
         self.post("/trash/empty")
         _status, body = self.get("/")
         self.assertIn("Deleted 2 paintings for good.", body.decode())
@@ -513,17 +517,17 @@ class ServeGallery(unittest.TestCase):
 
     def test_the_trash_survives_the_gallery_closing(self):
         # the whole point of a durable trash: restore it days later, in a new process
-        self.post("/unstar/101")
+        self.post("/unstar/Q101")
         self.server.shutdown()
         self.server.server_close()
 
         reopened = stars.serve_gallery(self.cfg, Recorder())
         self.addCleanup(reopened.server_close)
 
-        self.assertEqual([t["star"]["qid"] for t in stars.load_trash(self.cfg)], [101])
-        self.assertEqual(self.cfg.trash_image(101).read_bytes(), IMAGE_BYTES)
-        stars.restore(self.cfg, 101)  # still restorable in the new session
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101, 102])
+        self.assertEqual([t["star"]["key"] for t in stars.load_trash(self.cfg)], ["Q101"])
+        self.assertEqual(self.cfg.trash_image("Q101").read_bytes(), IMAGE_BYTES)
+        stars.restore(self.cfg, "Q101")  # still restorable in the new session
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101", "Q102"])
 
     def test_does_not_serve_the_rest_of_the_filesystem(self):
         for path in ("/stars.json", "/images/../stars.json", "/etc/passwd", "/.trash/trash.json"):
@@ -559,8 +563,8 @@ class StarFromLink(unittest.TestCase):
 
         self.assertEqual(outcome, "starred")
         self.assertEqual(record["title"], "Painting 101")
-        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
-        self.assertEqual(cfg.star_image(101).read_bytes(), IMAGE_BYTES)
+        self.assertEqual([s["key"] for s in stars.load(cfg)], ["Q101"])
+        self.assertEqual(cfg.star_image("Q101").read_bytes(), IMAGE_BYTES)
 
     def test_the_pasted_record_is_shaped_like_every_other_star(self):
         cfg = self.config()
@@ -574,23 +578,23 @@ class StarFromLink(unittest.TestCase):
         _record, outcome = stars.star_link(cfg, link_to(101))
 
         self.assertEqual(outcome, "already")
-        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
-        self.assertTrue(cfg.star_image(101).exists())
+        self.assertEqual([s["key"] for s in stars.load(cfg)], ["Q101"])
+        self.assertTrue(cfg.star_image("Q101").exists())
 
     def test_pasting_a_trashed_painting_restores_it(self):
         # adding it afresh would leave the trash holding the same QID, and
         # restoring that later would hang a second copy of the painting
         cfg = self.config()
         stars.star_link(cfg, link_to(101))
-        stars.unstar(cfg, 101)
+        stars.unstar(cfg, "Q101")
 
         _record, outcome = stars.star_link(cfg, link_to(101))
 
         self.assertEqual(outcome, "restored")
-        self.assertEqual([s["qid"] for s in stars.load(cfg)], [101])
+        self.assertEqual([s["key"] for s in stars.load(cfg)], ["Q101"])
         self.assertEqual(stars.load_trash(cfg), [])
-        self.assertEqual(cfg.star_image(101).read_bytes(), IMAGE_BYTES)
-        self.assertFalse(cfg.trash_image(101).exists())
+        self.assertEqual(cfg.star_image("Q101").read_bytes(), IMAGE_BYTES)
+        self.assertFalse(cfg.trash_image("Q101").exists())
 
     def test_a_bad_link_raises_rather_than_starring_anything(self):
         cfg = self.config()
@@ -655,8 +659,8 @@ class PasteIntoGallery(unittest.TestCase):
 
         self.assertEqual(status, 303)
         self.assertEqual(location, "/")
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101])
-        self.assertEqual(self.cfg.star_image(101).read_bytes(), IMAGE_BYTES)
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101"])
+        self.assertEqual(self.cfg.star_image("Q101").read_bytes(), IMAGE_BYTES)
 
     def test_the_new_painting_appears_in_the_gallery(self):
         self.paste(link_to(101))
@@ -674,11 +678,11 @@ class PasteIntoGallery(unittest.TestCase):
         self.paste(link_to(101))
 
         self.assertIn("Already in the gallery: <i>Painting 101</i>.", self.get("/"))
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [101])
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q101"])
 
     def test_pasting_a_trashed_painting_reports_the_restore(self):
         self.paste(link_to(101))
-        stars.unstar(self.cfg, 101)
+        stars.unstar(self.cfg, "Q101")
         self.paste(link_to(101))
 
         self.assertIn("Restored from the trash: <i>Painting 101</i>.", self.get("/"))
@@ -828,7 +832,7 @@ class TrashFile(unittest.TestCase):
 
     def test_an_absent_trash_reads_as_empty(self):
         self.assertEqual(stars.load_trash(self.cfg), [])
-        self.assertFalse(stars.in_trash(self.cfg, 101))
+        self.assertFalse(stars.in_trash(self.cfg, "Q101"))
 
     def test_emptying_an_absent_trash_is_a_no_op(self):
         self.assertEqual(stars.empty_trash(self.cfg), 0)
@@ -836,22 +840,22 @@ class TrashFile(unittest.TestCase):
 
     def test_restoring_into_a_gallery_that_shrank_clamps_the_index(self):
         # trashed from position 5, but only one painting is left: it goes at the end
-        image = self.cfg.trash_image(101)
+        image = self.cfg.trash_image("Q101")
         image.parent.mkdir(parents=True, exist_ok=True)
         image.write_bytes(IMAGE_BYTES)
         stars.save(self.cfg, [star_of(102)])
         stars.save_trash(self.cfg, [{"index": 5, "star": star_of(101)}])
 
-        stars.restore(self.cfg, 101)
+        stars.restore(self.cfg, "Q101")
 
-        self.assertEqual([s["qid"] for s in stars.load(self.cfg)], [102, 101])
+        self.assertEqual([s["key"] for s in stars.load(self.cfg)], ["Q102", "Q101"])
 
 
 class SessionTests(unittest.TestCase):
     def test_the_flash_is_read_once(self):
         session = stars.Session()
-        session.flash = stars.Flash("Removed", "Painting 101", 101)
-        self.assertEqual(session.take_flash().undo_qid, 101)
+        session.flash = stars.Flash("Removed", "Painting 101", "Q101")
+        self.assertEqual(session.take_flash().undo_key, "Q101")
         self.assertIsNone(session.take_flash())
 
     def test_a_fresh_session_has_no_flash(self):
