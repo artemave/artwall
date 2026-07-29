@@ -58,6 +58,14 @@ Trashed = dict[str, Any]
 # Loopback only. The gallery can delete your paintings; it is not for the network.
 HOST = "127.0.0.1"
 
+# Credited in the published page's footer. Not a config key: it names artwall
+# itself, not anything about this collection or where it's hosted.
+ARTWALL_URL = "https://github.com/artemave/artwall"
+# The published page's <title>. The heading still counts the paintings, but a
+# browser tab, a bookmark and a search result want the name of the thing, not a
+# number that changes every time you star something.
+PUBLIC_TITLE = "artwall - stars"
+
 # One publish at a time. Its callers are concurrent — the gallery runs a thread per
 # request, and the overlay publishes on its own thread after a star — and two builds
 # at once would interleave one's `_prune` with the other's copies.
@@ -107,6 +115,11 @@ CSS = """
 @media (prefers-color-scheme: dark) {
   :root { --bg: #16161a; --fg: #ececec; --dim: #8f8f96; }
 }
+/* On the root as well as the body. iOS paints the strip behind Safari's toolbar
+   and the home indicator from the *canvas* background, which comes from the root
+   element; a background set only on <body> leaves that strip Safari's own grey,
+   so a dark gallery ends in a pale band. Only a real phone shows this. */
+html { background: var(--bg); }
 body {
   margin: 0; padding: clamp(1.5rem, 6vw, 3rem) clamp(1rem, 5vw, 5rem);
   background: var(--bg); color: var(--fg);
@@ -205,6 +218,12 @@ figcaption time { color: var(--dim); }
 .add input:focus-visible { outline: 2px solid var(--fg); outline-offset: -1px; }
 .danger { margin: 0; }
 .danger button { background: #a4302c; color: #fff; }
+
+/* Published page only: who made the thing you're looking at. Quiet, and clear of
+   the last row of paintings — a masonry's columns end at different heights, so it
+   needs real space above it rather than a hairline rule. */
+footer { margin: 3.5rem 0 0; color: var(--dim); font-size: .85rem; }
+footer a { color: inherit; }
 """
 
 PAGE = """<!doctype html>
@@ -558,8 +577,11 @@ def render_public(stars: list[Star]) -> str:
 
     The empty-state copy is neutral: the desktop page tells you to click the ★ on
     a wallpaper caption, which means nothing to someone who found this on the web.
+
+    It is also the only page that names the tool. A tab, a bookmark and a search
+    result want `PUBLIC_TITLE` rather than a count that changes on every star, and
+    a stranger who likes the collection has nowhere else to find out what built it.
     """
-    title = _title(stars)
     if stars:
         body = _grid(
             [
@@ -574,7 +596,11 @@ def render_public(stars: list[Star]) -> str:
         )
     else:
         body = '<p class="empty">No paintings here yet.</p>'
-    return PAGE.format(title=title, heading=title, css=CSS, body=body)
+    body += (
+        f'<footer>Starred with <a href="{ARTWALL_URL}" '
+        f'target="_blank" rel="noopener noreferrer">artwall</a></footer>'
+    )
+    return PAGE.format(title=PUBLIC_TITLE, heading=_title(stars), css=CSS, body=body)
 
 
 def write_page(config: Config) -> Path:

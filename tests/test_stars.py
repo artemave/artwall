@@ -391,6 +391,39 @@ class RenderPublic(unittest.TestCase):
     def test_it_declares_a_viewport_so_phones_do_not_zoom_out(self):
         self.assertIn('name="viewport" content="width=device-width', stars.render_public([]))
 
+    def test_the_tab_is_named_for_the_thing_not_the_count(self):
+        # a bookmark or a search result wants the gallery's name, not a number that
+        # changes every time a painting is starred
+        page = stars.render_public([star_of(101), star_of(102)])
+        self.assertIn("<title>artwall - stars</title>", page)
+        self.assertIn("★ 2 starred paintings<", page)  # the heading still counts
+
+    def test_it_credits_the_tool_that_built_it(self):
+        page = stars.render_public([star_of(101)])
+        self.assertIn(
+            '<footer>Starred with <a href="https://github.com/artemave/artwall" '
+            'target="_blank" rel="noopener noreferrer">artwall</a></footer>',
+            page,
+        )
+
+    def test_the_empty_page_is_credited_too(self):
+        self.assertIn("<footer>", stars.render_public([]))
+
+    def test_only_the_published_page_carries_the_footer(self):
+        # the local gallery has no strangers to introduce itself to
+        self.assertNotIn("<footer>", stars.render_page([star_of(101)], interactive=True))
+        self.assertNotIn("<footer>", stars.render_page([star_of(101)]))
+        self.assertNotIn("<footer>", stars.render_trash([]))
+
+    def test_the_local_pages_keep_their_own_title(self):
+        self.assertIn("<title>★ 1 starred painting</title>", stars.render_page([star_of(101)]))
+
+    def test_the_root_carries_the_background_not_just_the_body(self):
+        # iOS paints the strip behind its toolbar from the canvas background, which
+        # comes from the root element. Set on <body> alone, a dark gallery ends in a
+        # pale grey band on a real iPhone — which no desktop browser reproduces.
+        self.assertIn("html { background: var(--bg); }", stars.render_public([]))
+
     def test_hover_only_polish_is_gated_away_from_touchscreens(self):
         # a tap leaves :hover stuck on the thing you tapped, so a hover *reveal*
         # would stay revealed on one painting for the whole visit
