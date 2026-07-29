@@ -4,8 +4,7 @@ import json
 import os
 import random
 import re
-import subprocess
-import sys
+import shutil
 import tempfile
 import threading
 import time
@@ -323,6 +322,207 @@ class WritePage(unittest.TestCase):
         self.assertIn("Nothing starred yet", stars.write_page(self.cfg).read_text())
 
 
+class RenderPublic(unittest.TestCase):
+    """The page meant for the open internet: a list, and nothing that acts on it."""
+
+    def test_the_grid_loads_the_web_sized_copy_not_the_archive(self):
+        # the whole reason the published site exists: a page of 2560px museum scans
+        # is tens of megabytes, which is the difference between usable and not on a
+        # phone. The archive is still one tap away.
+        page = stars.render_public([star_of(101)])
+        self.assertIn('<img src="thumbs/Q101.jpg"', page)
+        self.assertIn('<a class="art" href="images/Q101.jpg">', page)
+
+    def test_every_path_is_relative_so_the_directory_uploads_anywhere(self):
+        page = stars.render_public([star_of(101)])
+        self.assertNotIn('src="/', page)
+        self.assertNotIn('href="/', page)  # works from a subdirectory of a host too
+
+    def test_nothing_on_the_page_can_change_anything(self):
+        page = stars.render_public([star_of(101), star_of(102)])
+        self.assertNotIn("<form", page)  # no unstar, no paste box, no delete
+        self.assertNotIn("/trash", page)
+        self.assertNotIn("<script", page)
+
+    def test_it_still_credits_and_links_each_painting(self):
+        page = stars.render_public([star_of(101)])
+        self.assertIn("Rembrandt", page)
+        self.assertIn('href="https://en.wikipedia.org/wiki/Painting_101"', page)
+
+    def test_it_is_headed_like_the_rest_of_the_gallery(self):
+        self.assertIn("★ 1 starred painting<", stars.render_public([star_of(101)]))
+        self.assertIn("★ 2 starred paintings<", stars.render_public([star_of(101), star_of(102)]))
+
+    def test_the_empty_state_does_not_talk_about_the_desktop(self):
+        # "click the ★ next to a wallpaper caption" means nothing to a visitor
+        page = stars.render_public([])
+        self.assertIn("No paintings here yet", page)
+        self.assertNotIn("wallpaper", page)
+
+    def test_it_declares_a_viewport_so_phones_do_not_zoom_out(self):
+        self.assertIn('name="viewport" content="width=device-width', stars.render_public([]))
+
+    def test_hover_only_polish_is_gated_away_from_touchscreens(self):
+        # a tap leaves :hover stuck on the thing you tapped, so a hover *reveal*
+        # would stay revealed on one painting for the whole visit
+        page = stars.render_public([star_of(101)])
+        gated = page.split("@media (hover: hover)")[1]
+        for rule in [".art:hover img", ".title:hover"]:
+            self.assertIn(rule, gated)
+
+
+class Publish(unittest.TestCase):
+    """`--publish`: the self-contained directory you upload."""
+
+    def setUp(self):
+        self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
+        self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=self.data_dir)
+        self.runner = Recorder()
+
+    def archive(self, *keys):
+        """Star some paintings, with the archived image each one needs."""
+        self.cfg.star_image("x").parent.mkdir(parents=True, exist_ok=True)
+        for key in keys:
+            self.cfg.star_image(key).write_bytes(IMAGE_BYTES)
+        stars.save(self.cfg, [star_of(0, key=key) for key in keys])
+
+    def test_builds_a_page_the_images_and_the_thumbnails(self):
+        self.archive("Q101", "Q102")
+
+        out = stars.publish(self.cfg, self.runner)
+
+        self.assertEqual(out, self.data_dir / "public")
+        self.assertIn('<img src="thumbs/Q101.jpg"', (out / "index.html").read_text())
+        # the full-size copies are real files, so the archive links resolve offline
+        self.assertEqual((out / "images" / "Q101.jpg").read_bytes(), IMAGE_BYTES)
+        self.assertEqual((out / "images" / "Q102.jpg").read_bytes(), IMAGE_BYTES)
+
+    def test_it_is_index_html_so_a_host_serves_it_for_the_bare_url(self):
+        self.archive("Q101")
+        self.assertTrue((stars.publish(self.cfg, self.runner) / "index.html").exists())
+
+    def test_a_thumbnail_is_shrunk_from_the_archive_at_the_configured_size(self):
+        self.cfg.public_image_width = 900
+        self.archive("Q101")
+
+        stars.publish(self.cfg, self.runner)
+
+        (argv, check) = self.runner.calls[0]
+        self.assertTrue(check)
+        self.assertEqual(argv[:2], ["magick", str(self.cfg.star_image("Q101"))])
+        self.assertIn("900x900>", argv)  # fits inside the box, and only ever shrinks
+        self.assertEqual(argv[-1], str(self.cfg.public_thumb("Q101")))
+
+    def test_the_export_holds_nothing_but_paintings_and_the_page(self):
+        # publishing data_dir itself would upload stars.json and the record of
+        # every painting ever removed; this directory is why it doesn't.
+        self.archive("Q101")
+        self.cfg.trash_image("Q999").parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.trash_image("Q999").write_bytes(IMAGE_BYTES)
+
+        out = stars.publish(self.cfg, self.runner)
+
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["images", "index.html", "thumbs"])
+        self.assertEqual([p.name for p in (out / "images").iterdir()], ["Q101.jpg"])
+
+    def test_republishing_does_not_rebuild_what_is_already_current(self):
+        # a build you re-run should be cheap — otherwise every publish is a magick
+        # process per painting for output that is already correct
+        self.archive("Q101")
+        stars.publish(self.cfg, self.runner)
+        self.cfg.public_thumb("Q101").write_bytes(IMAGE_BYTES)  # the Recorder ran nothing
+
+        stars.publish(self.cfg, self.runner)
+
+        self.assertEqual(len(self.runner.calls), 1)
+
+    def test_restarring_a_painting_rebuilds_its_export(self):
+        self.archive("Q101")
+        stars.publish(self.cfg, self.runner)
+        self.cfg.public_thumb("Q101").write_bytes(b"stale")
+        os.utime(self.cfg.star_image("Q101"), (time.time() + 10, time.time() + 10))
+
+        stars.publish(self.cfg, self.runner)
+
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_unstarring_removes_the_painting_from_the_published_site(self):
+        # a file left behind goes on being served at its own URL long after the
+        # painting stopped appearing on the page
+        self.archive("Q101", "Q102")
+        stars.publish(self.cfg, self.runner)
+        self.cfg.public_thumb("Q102").write_bytes(IMAGE_BYTES)
+        stars.save(self.cfg, [s for s in stars.load(self.cfg) if s["key"] == "Q101"])
+
+        out = stars.publish(self.cfg, self.runner)
+
+        self.assertFalse((out / "images" / "Q102.jpg").exists())
+        self.assertFalse((out / "thumbs" / "Q102.jpg").exists())
+        self.assertTrue((out / "images" / "Q101.jpg").exists())
+        self.assertNotIn("Q102", (out / "index.html").read_text())
+
+    def test_publishing_an_empty_gallery_still_produces_a_site(self):
+        out = stars.publish(self.cfg, self.runner)
+        self.assertIn("No paintings here yet", (out / "index.html").read_text())
+        self.assertEqual(self.runner.calls, [])
+
+
+class StartGallery(unittest.TestCase):
+    """`start_gallery()` — what the overlay hosts, minus the browser launch."""
+
+    def setUp(self):
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
+        )
+        self.runner = Recorder()
+
+    def start(self, **kwargs):
+        server = stars.start_gallery(self.cfg, runner=self.runner, **kwargs)
+        self.addCleanup(server.server_close)
+        return server
+
+    def archive(self, *keys):
+        self.cfg.star_image("x").parent.mkdir(parents=True, exist_ok=True)
+        for key in keys:
+            self.cfg.star_image(key).write_bytes(IMAGE_BYTES)
+        stars.save(self.cfg, [star_of(0, key=key) for key in keys])
+
+    def test_binds_without_opening_a_browser(self):
+        # the overlay has a button for that; it must not launch one on login
+        server = self.start(republish=False)
+        self.assertTrue(server.url.startswith("http://127.0.0.1:"))
+        self.assertEqual(self.runner.calls, [])
+
+    def test_it_refreshes_the_archived_page(self):
+        stars.save(self.cfg, [star_of(101)])
+        self.start(republish=False)
+        self.assertIn("Q101.jpg", self.cfg.stars_page.read_text())
+
+    def test_one_gallery_is_structural_not_enforced(self):
+        # there used to be a pid file and a SIGTERM dance here, because `--stars`
+        # could be run twice. Only the overlay serves now, and only one of those
+        # can exist, so a second server is not something to defend against.
+        first, second = self.start(republish=False), self.start(republish=False)
+        self.assertNotEqual(first.url, second.url)  # each binds its own port, fine
+        self.assertFalse((self.cfg.cache_dir / "stars.pid").exists())
+
+    def test_it_publishes_at_startup_by_default(self):
+        # the site is rebuilt before anything is served, so a collection changed
+        # while the overlay was down doesn't leave a stale page on the web
+        self.archive("Q101")
+
+        self.start()
+
+        self.assertIn("Q101", self.cfg.public_page.read_text())
+
+    def test_opting_out_builds_no_site_at_all(self):
+        # --no-publish-stars: someone who never uploads shouldn't carry a second
+        # copy of every painting on disk
+        self.archive("Q101")
+        self.start(republish=False)
+        self.assertFalse(self.cfg.public_dir.exists())
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """An opener that reports a 3xx instead of chasing it."""
 
@@ -336,8 +536,6 @@ class ServeGallery(unittest.TestCase):
     def setUp(self):
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.data_dir = Path(tempfile.mkdtemp()) / "artwall"
-        # cache_dir too, never the default: serve_gallery() writes stars.pid there
-        # and signals whatever it names — the developer's own gallery, otherwise.
         self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=self.data_dir)
         self.cfg.star_image("Q101").parent.mkdir(parents=True, exist_ok=True)
         self.cfg.star_image("Q101").write_bytes(IMAGE_BYTES)
@@ -345,7 +543,7 @@ class ServeGallery(unittest.TestCase):
         stars.save(self.cfg, [star_of(101), star_of(102)])
 
         self.runner = Recorder()
-        self.server = stars.serve_gallery(self.cfg, self.runner)
+        self.server = stars.start_gallery(self.cfg, republish=False, runner=self.runner)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
@@ -370,10 +568,10 @@ class ServeGallery(unittest.TestCase):
             return error.code, error.headers.get("Location")
         return response.status, response.headers.get("Location")
 
-    def test_opens_the_browser_at_the_served_url(self):
-        argv, check = self.runner.calls[0]
-        self.assertEqual(argv, ["xdg-open", self.base + "/"])
-        self.assertTrue(check)
+    def test_binding_opens_no_browser_and_shells_out_to_nothing(self):
+        # the overlay starts this at login; a browser tab per login would be rude,
+        # and the caption's gallery button is what opens it on demand
+        self.assertEqual(self.runner.calls, [])
 
     def test_serves_the_gallery_with_unstar_buttons(self):
         status, body = self.get("/")
@@ -521,7 +719,7 @@ class ServeGallery(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
 
-        reopened = stars.serve_gallery(self.cfg, Recorder())
+        reopened = stars.start_gallery(self.cfg, republish=False, runner=Recorder())
         self.addCleanup(reopened.server_close)
 
         self.assertEqual([t["star"]["key"] for t in stars.load_trash(self.cfg)], ["Q101"])
@@ -620,7 +818,7 @@ class PasteIntoGallery(unittest.TestCase):
             config_for(wiki, self.cache_dir), data_dir=self.data_dir
         )
 
-        self.server = stars.serve_gallery(self.cfg, Recorder())
+        self.server = stars.start_gallery(self.cfg, republish=False, runner=Recorder())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
@@ -707,121 +905,76 @@ class PasteIntoGallery(unittest.TestCase):
         self.assertIn('action="/star"', page)
 
 
-class StopPrevious(unittest.TestCase):
-    """Driven against real spawned processes — no mocks, no patched os.kill."""
+class ServeGalleryRepublishing(unittest.TestCase):
+    """The gallery with `republish` on — what `--serve-stars --publish-stars` gives
+    you. Every mutation has to reach the published site, not just `stars.json`."""
 
     def setUp(self):
-        self.cfg = Config(cache_dir=Path(tempfile.mkdtemp()))
-        self.cfg.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def spawn(self, argv_tail, trap=False):
-        """A real, live process whose /proc cmdline we control.
-
-        The extra argv after -c lands in sys.argv, so the cmdline can be made to
-        look like a gallery server (or deliberately not like one) while the
-        process is genuinely running.
-
-        A `trap`ping child ignores SIGTERM — but only once it has run, so it
-        writes a ready file first and we wait for it. Signalling before then
-        would hit the default handler and kill the very process meant to survive.
-        """
-        ready = Path(tempfile.mkdtemp()) / "ready"
-        code = (
-            "import signal, sys, time, pathlib; "
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "pathlib.Path(sys.argv[-1]).write_text('ok'); "
-            "time.sleep(60)"
-            if trap
-            else "import sys, time, pathlib; "
-            "pathlib.Path(sys.argv[-1]).write_text('ok'); "
-            "time.sleep(60)"
+        self.opener = urllib.request.build_opener(_NoRedirect)
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
         )
-        process = subprocess.Popen([sys.executable, "-c", code, *argv_tail, str(ready)])
-        self.addCleanup(process.wait)
-        self.addCleanup(process.kill)
+        self.cfg.star_image("Q101").parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.star_image("Q101").write_bytes(IMAGE_BYTES)
+        self.cfg.star_image("Q102").write_bytes(IMAGE_BYTES)
+        stars.save(self.cfg, [star_of(101), star_of(102)])
 
-        deadline = time.monotonic() + 10
-        while not ready.exists() and time.monotonic() < deadline:
-            if process.poll() is not None:
-                self.fail(f"spawned process exited early ({process.returncode})")
-            time.sleep(0.02)
-        self.assertTrue(ready.exists(), "spawned process never started")
-        return process
+        self.runner = Recorder()
+        self.server = stars.start_gallery(self.cfg, republish=True, runner=self.runner)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = self.server.url.rstrip("/")
 
-    def write_pid(self, pid):
-        self.cfg.stars_pid.write_text(str(pid))
+    def post(self, path):
+        request = urllib.request.Request(self.base + path, data=b"", method="POST")
+        with contextlib.suppress(urllib.error.HTTPError):
+            self.opener.open(request)
 
-    def test_no_pid_file_means_nothing_to_stop(self):
-        self.assertIsNone(stars.stop_previous(self.cfg))
+    def site(self):
+        return self.cfg.public_page.read_text()
 
-    def test_stops_a_running_gallery(self):
-        process = self.spawn(["-m", "artwall", "--stars"])
-        self.write_pid(process.pid)
+    def test_the_site_exists_before_anything_is_clicked(self):
+        self.assertIn("Q101", self.site())
+        self.assertIn("Q102", self.site())
 
-        self.assertEqual(stars.stop_previous(self.cfg), process.pid)
-        self.assertIsNotNone(process.wait(timeout=5))  # really gone
+    def test_unstarring_removes_the_painting_from_the_published_site(self):
+        # the point of the whole flag: a painting you took down stops being on
+        # the web, without you having to remember to run --publish
+        self.post("/unstar/Q102")
 
-    def test_a_stale_pid_file_is_harmless(self):
-        process = self.spawn(["-m", "artwall", "--stars"])
-        pid = process.pid
-        process.kill()
-        process.wait()
-        self.write_pid(pid)
+        self.assertNotIn("Q102", self.site())
+        self.assertFalse(self.cfg.public_image("Q102").exists())
+        self.assertIn("Q101", self.site())
 
-        self.assertIsNone(stars.stop_previous(self.cfg))
+    def test_restoring_puts_it_back_on_the_site(self):
+        self.post("/unstar/Q102")
+        self.post("/restore/Q102")
 
-    def test_a_recycled_pid_is_not_killed(self):
-        # the PID is live, but it belongs to something else entirely now
-        process = self.spawn(["something", "else"])
-        self.write_pid(process.pid)
+        self.assertIn("Q102", self.site())
+        self.assertTrue(self.cfg.public_image("Q102").exists())
 
-        self.assertIsNone(stars.stop_previous(self.cfg))
-        self.assertIsNone(process.poll())  # untouched
+    def test_emptying_the_trash_leaves_the_site_alone(self):
+        # the painting already left the site when it was unstarred; deleting the
+        # trashed copy is not another change to what's published
+        self.post("/unstar/Q102")
+        self.post("/trash/empty")
 
-    def test_our_own_pid_is_never_signalled(self):
-        self.write_pid(os.getpid())
-        self.assertIsNone(stars.stop_previous(self.cfg))
+        self.assertIn("Q101", self.site())
+        self.assertNotIn("Q102", self.site())
 
-    def test_a_gallery_that_will_not_exit_is_reported(self):
-        process = self.spawn(["-m", "artwall", "--stars"], trap=True)
-        self.write_pid(process.pid)
+    def test_opting_out_publishes_nothing(self):
+        server = stars.start_gallery(self.cfg, republish=False, runner=Recorder())
+        self.addCleanup(server.server_close)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = server.url.rstrip("/")
+        shutil.rmtree(self.cfg.public_dir)
 
-        with self.assertRaises(RuntimeError) as cm:
-            stars.stop_previous(self.cfg, timeout=0.2)
-        self.assertIn(str(process.pid), str(cm.exception))
-        self.assertIsNone(process.poll())  # still there, still ignoring us
+        request = urllib.request.Request(base + "/unstar/Q101", data=b"", method="POST")
+        with contextlib.suppress(urllib.error.HTTPError):
+            self.opener.open(request)
 
-
-class IsGallery(unittest.TestCase):
-    def test_recognises_a_gallery_server(self):
-        self.assertTrue(stars.is_gallery("/usr/bin/python3\0-m\0artwall\0--stars\0"))
-
-    def test_rejects_another_artwall_process(self):
-        # the wallpaper oneshot and the overlay must survive a --stars
-        self.assertFalse(stars.is_gallery("/usr/bin/python3\0-m\0artwall\0--throttle\0"))
-        self.assertFalse(stars.is_gallery("/usr/bin/python3\0-m\0artwall.overlay\0"))
-
-    def test_rejects_an_unrelated_process(self):
-        self.assertFalse(stars.is_gallery("/usr/bin/firefox\0--stars\0"))
-
-    def test_a_dead_process_has_no_cmdline(self):
-        self.assertEqual(stars._cmdline(-1), "")
-
-
-class GalleryPidFile(unittest.TestCase):
-    def test_serving_records_the_pid_and_replaces_a_previous_gallery(self):
-        cfg = Config(
-            cache_dir=Path(tempfile.mkdtemp()),
-            data_dir=Path(tempfile.mkdtemp()) / "artwall",
-        )
-        first = stars.serve_gallery(cfg, Recorder())
-        self.addCleanup(first.server_close)
-        self.assertEqual(cfg.stars_pid.read_text(), str(os.getpid()))
-
-        # a second serve in this same process must not signal itself
-        second = stars.serve_gallery(cfg, Recorder())
-        self.addCleanup(second.server_close)
-        self.assertEqual(cfg.stars_pid.read_text(), str(os.getpid()))
+        self.assertFalse(self.cfg.public_dir.exists())
 
 
 class TrashFile(unittest.TestCase):

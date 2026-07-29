@@ -50,6 +50,12 @@ caption_mode = "interactive"
 # hence the cap.
 stars_image_width = 2560
 
+# Longest side of the images the *published* gallery (`artwall --publish`) loads
+# in its grid. The full-size archives above are exported alongside and each tile
+# links to one, so this only bounds the page weight — which is the difference
+# between usable and not on a phone.
+public_image_width = 1200
+
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).
 min_interval = 1800

@@ -53,9 +53,9 @@ python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coa
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
 python3 -m artwall --star DP-1            # star/unstar that display's painting (the overlay's ★ button)
-python3 -m artwall --stars                # serve the starred gallery on loopback + xdg-open it (Ctrl-C to stop);
-                                          # its paste box stars a painting from a Wikipedia image link
-python3 -m artwall.overlay               # the "interactive"-mode caption overlay (needs PyGObject + gtk-layer-shell)
+python3 -m artwall.overlay               # the caption overlay (needs PyGObject + gtk-layer-shell). Also hosts the
+                                         # starred gallery and maintains data_dir/public/ — both on by default;
+                                         # opt out with --no-serve-stars / --no-publish-stars
 ```
 
 ## Architecture
@@ -79,7 +79,12 @@ it can be tested without network or `swaymsg`.
   generated `stars_page` (`stars.html`), which sits *with* the images rather than
   in the cache because it links to them by relative path, keeping the directory
   portable and backup-able; `trash_dir`/`trash_file`/`trash_image(qid)` hold
-  unstarred paintings until the trash is emptied. The field defaults
+  unstarred paintings until the trash is emptied. `public_dir` (+ `public_page`,
+  `public_image_dir`/`public_image(key)`, `public_thumb_dir`/`public_thumb(key)`,
+  `public_image_width`) is the published-site export: **a subdirectory rather than
+  `data_dir` itself**, because uploading `data_dir` would publish `stars.json`
+  and the whole trash — the record of every painting you ever removed.
+  The field defaults
   are the built-ins; `Config.load(path)` overlays the user's TOML (`config_file()`
   → `$XDG_CONFIG_HOME/artwall/config.toml`), passing keys straight to the
   constructor so a typo fails loudly. `ids_filename(query)` is the md5-of-query
@@ -167,8 +172,8 @@ it can be tested without network or `swaymsg`.
   self-contained HTML. `star(output)` reads the caption record, toggles it, and
   downloads the painting into `star_image(key)` — writing the archive *before*
   saving the list, so a failed download never leaves a star pointing at a missing
-  image. `write_page()` writes the archived `stars.html`; `serve_gallery()` backs
-  `--stars`.
+  image. `write_page()` writes the archived `stars.html`; `start_gallery()` binds the
+  server the overlay hosts.
   `star_link(config, link)` is the gallery's paste box: it hands the URL to
   `app.resolve_link()` and archives the result. Deliberately **not** a toggle —
   you paste to *add*, so a link you've already hung reports `"already"` and
@@ -178,7 +183,7 @@ it can be tested without network or `swaymsg`.
   hang a second copy of the same painting.
   **Why a server:** the overlay's ★ can only unstar the painting *currently* on a
   display, so the gallery must be able to remove an older one — and a `file://`
-  page cannot delete a file. So `--stars` renders over a loopback `http.server`
+  page cannot delete a file. So the gallery renders over a loopback `http.server`
   (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
   + 303 — no JavaScript. `_Gallery` answers exactly `/`, `/trash`,
   `/images/<key>.jpg`, `/trash/images/<key>.jpg`, `POST /unstar/<key>`,
@@ -187,50 +192,46 @@ it can be tested without network or `swaymsg`.
   link, form-urlencoded) — every other mutation carries its QID in the path. A
   link that won't resolve comes back as a `Flash`, not an error status: it's
   typed input, so a typo must not replace the gallery with a browser error page.
-  **`--stars` replaces a previous `--stars`.** `stop_previous()` SIGTERMs the
-  gallery named in `config.stars_pid` before binding. Not about port contention —
-  each server binds port 0 — but about there being one gallery: a forgotten server
-  keeps answering the tab you already have open, and a long-lived process keeps
-  the code it started with, so it serves stale behaviour after the source changes
-  (this bit for real: an old server kept captioning a painting with a date the
-  fixed code no longer produces). The PID file alone isn't trusted — `is_gallery()`
-  checks the process's `/proc` cmdline for both `artwall` and `--stars`, so a stale
-  file, a recycled PID, the overlay and the `--throttle` oneshots are all safe. The
-  pid file is deliberately *not* removed on exit: a crash or `kill -9` would skip
-  that anyway, which is exactly why the cmdline check is the real guard.
-  **Tests must pass an explicit `cache_dir`** — `serve_gallery()` writes the pid
-  file there and `stop_previous()` signals whatever it names, so a `Config()` left
-  on the default would let the suite kill the developer's own gallery.
-  It's a
-  foreground command, not a daemon: `__main__` runs `serve_forever()` until Ctrl-C.
-  `write_page()` still writes the *button-less, trash-link-less* `stars.html` on
-  every mutation — nothing would answer those POSTs once the server exits, and its
-  job is to keep the backed-up directory readable anywhere.
-  **The trash is durable, and unstarring never deletes.** `unstar()` *moves* the
-  image to `trash_image(qid)` (a rename, same filesystem) and appends
-  `{"index", "star"}` to `trash.json` beside it; `restore()` moves it back and
-  reinserts at that index (clamped — the list may have shrunk). So a restore
-  returns the exact bytes, no refetch, whether it happens now or after a reboot.
-  `empty_trash()` is the only destructive call in the module. The overlay's ★ is
-  different: a toggle, so unstarring there just unlinks and re-starring re-downloads.
-  **The undo banner is a Rails-style flash**, not a query parameter: `Session.flash`
-  is set by a mutation and cleared by `take_flash()` on the next page render, so it
-  appears exactly once. A `?removed=<qid>` redirect target (the first attempt) left
-  the qid in the address bar forever and re-offered the undo on every reload. Only
-  `/` and `/trash` consume it — an image fetch must not. Note the test helper must
-  **not** follow the 303: landing on `/` renders, which consumes the flash the
-  assertion is about.
-  **Two CSS traps, both found only in a real browser** (substring assertions can't
-  see either): the flash is a `<div>`, not a `<p>`, because a paragraph can't
-  contain a form — browsers close it early and hoist the button out of the flex
-  row (`test_no_form_is_nested_inside_a_paragraph` guards it). And `figure` must be
-  block, not `inline-block`: an inline-block figure stops Chrome balancing the
-  masonry entirely and stacks every painting into column one. `_grid()` also caps
-  the container to `n` columns' width, because multicol balances to equal heights
-  and would otherwise squeeze three paintings into one column of a wide screen.
+  **`start_gallery()` is the only way a gallery starts**, and the overlay is its
+  only caller — it hosts one on a background thread for its whole lifetime.
+  `republish=True` (the default; the overlay's `--publish-stars`) rebuilds the
+  published site after every mutation, and once at startup so the first thing
+  served isn't a page left over from a collection that has since changed. The
+  `runner` is threaded through to `_Gallery` for it — publishing shells out to
+  `magick`, so without an injectable runner the served-gallery tests would really
+  invoke ImageMagick on a fake JPEG.
+  **There is no "replace the previous gallery" step and no PID file.** There used
+  to be, because a standalone `artwall --stars` could be run twice and leave two
+  servers answering two ports; `stop_previous()`/`is_gallery()`/`_cmdline()`/
+  `config.stars_pid` all existed for that and are gone. One gallery is now
+  *structural*: only the overlay serves one, and `supersede_running_instances()`
+  already guarantees a single overlay. This is the shape to keep — a state made
+  unreachable beats a mechanism that detects it.
+  **`render_public(stars)` + `publish()` are the third rendering — the one for the
+  open internet** (maintained by the overlay's `--publish-stars`, on by default).
+  What makes it public isn't the missing buttons
+  (`stars.html` has none either), it's *where* and *what*: a self-contained
+  `public/` holding only `index.html` + `thumbs/` + `images/`, so what you upload
+  can't include `stars.json` or `.trash/`; and a grid that loads web-sized copies
+  (`commands.thumbnail_command`, `{size}x{size}>` so it only ever *shrinks*) while
+  each tile links to the full archive — a page of 2560px scans is tens of megabytes,
+  which is the difference between usable and not on a phone. `_tile`'s `link` arg is
+  what splits `<img src>` from `<a href>` for this. It's a **build**: `_stale()`
+  skips what's current (else every re-publish is a `magick` per painting) and
+  `_prune()` deletes exports whose painting is no longer starred, because a file
+  left behind goes on being served at its own URL. `index.html`, not `stars.html`,
+  so a static host answers the bare directory URL.
+  **The shared `CSS` is mobile-first-ish and the hover rules are gated behind
+  `@media (hover: hover)`**: a tap leaves `:hover` stuck on whatever was tapped, so
+  any hover-*reveal* (the corner button's opacity, the trash's dimming) would stay
+  revealed on one painting for the whole visit. That gate is also where the corner
+  button shrinks — it rests at 2.75rem (a finger) and only a pointer device gets the
+  2rem version. `-webkit-text-size-adjust: 100%` stops iOS inflating the caption of
+  every narrow tile past the heading's size.
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + optional caption; `text=None` composes the painting bare, for
-  `"interactive"` mode) and `swaymsg`.
+  `"interactive"` mode — plus `thumbnail_command`, the published site's web-sized
+  copy) and `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
   get_font, throttle, only)` injects `rng`, `runner`, `get_outputs`, and `get_font`
   (defaulting to `random`, `subprocess.run`, `sway_outputs`, and `system_font`)
@@ -254,14 +255,31 @@ it can be tested without network or `swaymsg`.
 - `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent
   GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched from the
   Sway config) showing one `BOTTOM`-layer clickable caption per display — each
-  followed by a ★ button (`--star <name>`) and a refresh button that re-rolls that
+  followed by a ★ button (`--star <name>`), a gallery button (`xdg-open` on
+  `gallery_url()`) and a refresh button that re-rolls that
   display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
   monitor model, not the Sway connector name) and reloaded via a `Gio.FileMonitor`
   on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Both buttons
   go through `_spawn()`, which `Popen`s `python3 -m artwall …` and polls it on a
   `GLib.timeout`: starring downloads a full-size image, and doing that inline would
   freeze the widget. Nothing rewrites the caption file on a star, so `_toggle_star`
-  refreshes its own icon from `stars.json` once the child exits. **The lone module that needs a GUI
+  refreshes its own icon from `stars.json` once the child exits.
+  **It's the daemon, so it owns the gallery's lifetime.** `--serve-stars` binds
+  `stars.start_gallery()` and runs `serve_forever()` on a daemon thread for the
+  process's life — the gallery button then opens a live, editable page; with
+  `--no-serve-stars`, `gallery_url()` falls back to the archived `stars.html` as a
+  `file://` URI (and `main()` writes it first, so the button is never dead).
+  `--publish-stars` covers **both** mutation paths, which is the whole reason it
+  belongs here rather than on a oneshot: the gallery's own buttons republish
+  in-process (`_Gallery.republish`), and the overlay's ★ republishes via
+  `_publish_async()` in `_after_star`. Both flags are `BooleanOptionalAction`
+  defaulting to `True` — they are what the daemon is *for*, so they exist to be
+  negated. **`_publish_async` is a thread, not a child process.** It used to spawn
+  `artwall --publish`, which is the only reason that CLI flag existed; `publish()`
+  touches no GTK, so a thread does it with no second interpreter and no flag. It
+  must stay off the main loop either way — it runs `magick` per new painting, and
+  doing that inline would freeze every caption on every screen.
+  **The lone module that needs a GUI
   toolkit + a live display + a long-lived process** — kept out of the stdlib-only
   oneshot, omitted from coverage, but type-checked (GTK3 PyGObject-stubs, built
   via `PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3` in `make install-dev`).
@@ -303,6 +321,8 @@ omit) — it can't run headless. All state is cached under `~/.cache/artwall/`;
 deleting it is a safe reset. The one exception is the starred gallery under
 `~/.local/share/artwall/` (`stars.json` + `images/` + `stars.html` + `.trash/`) —
 durable, self-contained and meant to be backed up, which is exactly why it isn't cache.
+Its `public/` subdirectory is the odd one out: durable in location but entirely
+derived, so deleting it costs nothing but the overlay's next publish.
 
 ## Testing conventions
 
@@ -341,7 +361,10 @@ environment import (`swaymsg` talks to the IPC socket, it does not need
 Rotation itself is event-driven and self-throttled via `config.stamp`'s mtime —
 the oneshot never lingers. The one persistent process of ours is the optional
 `artwall.overlay` daemon (`"interactive"` mode only); in `"text"` mode there is none,
-and the only standing process is the stock `swaymsg -t subscribe` pipe. `--stars`
-also runs a loopback HTTP server, but in the foreground, for as long as you keep
-the gallery open — it's a command you Ctrl-C, never something Sway launches. The
+and the only standing process is the stock `swaymsg -t subscribe` pipe. The
+overlay also runs the gallery's loopback HTTP server on a background thread for
+its own lifetime, and publishes on another — both on by default, opt out with
+`--no-serve-stars` / `--no-publish-stars` (`bin/artwall-overlay` passes `"$@"`
+through). There is no standalone gallery command, which is what makes "exactly one
+gallery" structural rather than enforced. The
 trash outlives it: only the gallery's "Delete forever" button removes a painting.

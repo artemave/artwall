@@ -71,6 +71,27 @@ def compose_command(
     return command
 
 
+def thumbnail_command(source: Path, dest: Path, size: int) -> list[str]:
+    """Shrink an archived painting to a web-sized copy for the published gallery.
+
+    `{size}x{size}>` fits the painting inside a square of that side and — the `>` —
+    *only ever shrinks*, so a scan that was already small isn't blown up into a
+    blurry, larger file than the original. Bounding both sides rather than the
+    width alone keeps a tall portrait from being the one huge download on the page.
+
+    `-strip` drops the archive's metadata: smaller, and nothing on a public site
+    should carry EXIF it doesn't need. `-interlace Plane` writes a progressive
+    JPEG, which paints a whole low-detail image early instead of a sharp top edge
+    over blank space — the difference you actually feel on a phone.
+    """
+    return [
+        "magick", str(source),
+        "-resize", f"{size}x{size}>",
+        "-strip", "-interlace", "Plane", "-quality", "82",
+        str(dest),
+    ]
+
+
 def wallpaper_command(output: str, image_path: Path) -> list[str]:
     # The composed image is already the display's exact size, so `fill` is a
     # 1:1 blit — no cropping, no scaling.

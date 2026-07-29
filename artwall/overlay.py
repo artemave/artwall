@@ -2,23 +2,36 @@
 
 A small, persistent GTK layer-shell widget — launched once from the Sway config —
 that shows each display's current painting caption as a clickable link (it opens
-the Wikipedia article), followed by a star button that adds the painting to the
-gallery (`artwall --stars`) and a refresh button that re-rolls the wallpaper on
-that one display. It reads the per-output caption files `run()` writes
-(`caption-<output>.json`) and updates whenever they change.
+the Wikipedia article), followed by three buttons: a star that adds the painting
+to the gallery, a gallery button that opens the whole collection, and a refresh
+that re-rolls the wallpaper on that one display. It reads the per-output caption
+files `run()` writes (`caption-<output>.json`) and updates whenever they change.
+
+**This is the daemon, so this is where the gallery's lifetime belongs.** With
+`--serve-stars` the overlay binds the gallery server itself, on a background
+thread, for as long as it runs — so the collection is always one click away and
+`artwall --stars` (a foreground command you have to remember to start, and Ctrl-C)
+is no longer the only way to reach it. With `--publish-stars` it also keeps the
+published static site in step: the gallery's own buttons republish in-process, and
+a star from the overlay republishes once the `--star` child exits. Between those
+two paths every way a painting can enter or leave the collection is covered, which
+is the thing a one-shot `--publish` cannot promise.
 
 This is the one component that needs a GUI toolkit (PyGObject + gtk-layer-shell)
 and a long-lived process, so it lives outside the stdlib-only oneshot and is
 launched separately (`python3 -m artwall.overlay`). It can't run under the
-headless test suite, so it's excluded from coverage.
+headless test suite, so it's excluded from coverage — which is why everything it
+does beyond GTK wiring is a call into a tested function in `stars`.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -116,12 +129,20 @@ class Caption:
     """One clickable caption surface, pinned to a display, reloaded from its file."""
 
     def __init__(
-        self, config: Config, monitor: Gdk.Monitor, name: str, font: str
+        self,
+        config: Config,
+        monitor: Gdk.Monitor,
+        name: str,
+        font: str,
+        gallery_url: str,
+        republish: bool = False,
     ) -> None:
         self.name = name
         self.config = config
         self.path = config.caption_file(name)
         self.font = font
+        self.gallery_url = gallery_url
+        self.republish = republish
         self.url: str | None = None
         self.key: str | None = None
 
@@ -144,6 +165,18 @@ class Caption:
         self.star.set_margin_start(4)
         self.star.set_margin_end(4)
 
+        # a gallery button — clicking it opens the whole collection. Next to the
+        # star, because the two are about the same thing: one adds this painting,
+        # the other shows you everything you've added.
+        gallery_icon = Gtk.Image()
+        gallery_icon.set_from_icon_name("view-grid-symbolic", Gtk.IconSize.MENU)
+        gallery_icon.set_pixel_size(self.icon_pixels)
+        self.gallery = self._button(gallery_icon, self._open_gallery)
+        # Only an end margin: the star's own `margin_end` already opens up the gap
+        # on this button's left, and matching it on the right keeps all three icons
+        # evenly spaced instead of leaving refresh crowded against the grid.
+        self.gallery.set_margin_end(4)
+
         # a refresh button — clicking it re-rolls the wallpaper on this display
         refresh_icon = Gtk.Image()
         refresh_icon.set_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU)
@@ -154,6 +187,7 @@ class Caption:
         box.set_name("cap")
         box.pack_start(link, False, False, 0)
         box.pack_start(self.star, False, False, 0)
+        box.pack_start(self.gallery, False, False, 0)
         box.pack_start(self.refresh, False, False, 0)
 
         self.window = Gtk.Window()
@@ -240,12 +274,24 @@ class Caption:
         own, when `run()` rewrites the file the directory monitor watches."""
         self._spawn(["--output", self.name], self.refresh, lambda: None)
 
+    def _open_gallery(self, *_args: object) -> None:
+        """Open the whole starred collection — the live gallery if this overlay is
+        serving one, the archived `stars.html` otherwise (see `gallery_url`)."""
+        subprocess.Popen(["xdg-open", self.gallery_url])
+
     def _toggle_star(self, *_args: object) -> None:
         """Add this painting to the gallery, or take it out. Shelled out rather than
         done inline: starring downloads the full-size image to archive it, which would
         freeze the overlay. Nothing rewrites the caption file, so refresh the icon
         ourselves once it's done."""
-        self._spawn(["--star", self.name], self.star, self._show_star_state)
+        self._spawn(["--star", self.name], self.star, self._after_star)
+
+    def _after_star(self) -> None:
+        """Show the new star state, then — if we're keeping the published site in
+        step — rebuild it on a background thread (see `_publish_async`)."""
+        self._show_star_state()
+        if self.republish:
+            _publish_async(self.config)
 
     def _show_star_state(self) -> None:
         """Point the star icon at the truth on disk — filled if this display's
@@ -279,9 +325,74 @@ class Caption:
         self.window.show_all()
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Both features are **on by default** — they're what the daemon is for — so the
+    flags exist to be *negated* (`--no-serve-stars`, `--no-publish-stars`)."""
+    parser = argparse.ArgumentParser(
+        prog="artwall.overlay",
+        description='Interactive caption overlay for caption_mode = "interactive".',
+    )
+    parser.add_argument(
+        "--serve-stars",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Host the starred gallery for as long as the overlay runs, so the gallery "
+        "button opens the live, editable page. With --no-serve-stars it opens the "
+        "archived, read-only stars.html instead, and nothing listens on a port.",
+    )
+    parser.add_argument(
+        "--publish-stars",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the uploadable static site under the data directory's public/ in "
+        "step with the collection — rebuilt at startup and on every star, unstar, "
+        "restore and paste. --no-publish-stars builds no site at all.",
+    )
+    return parser.parse_args(argv)
+
+
+def _publish_async(config: Config) -> None:
+    """Rebuild the published site off the GTK main loop.
+
+    A thread, not a child process — publishing is `stars.publish()`, which touches
+    no GTK at all, so there is nothing to gain from a second interpreter and a CLI
+    flag to drive it. It must not run *here* though: it shrinks every newly starred
+    painting with `magick`, and doing that on the main loop would freeze every
+    caption on every screen while it ran. `publish()` takes a lock, so overlapping
+    calls from here and from the gallery's request threads queue up rather than
+    interleave.
+    """
+    threading.Thread(target=stars.publish, args=(config,), daemon=True).start()
+
+
+def gallery_url(config: Config, server: stars.GalleryServer | None) -> str:
+    """What the gallery button opens.
+
+    The live server's loopback URL when we're hosting one; otherwise the archived
+    `stars.html` as a `file://` link. The fallback is a real page — the same
+    gallery, just read-only — so the button is never dead, it only does less.
+    """
+    if server is not None:
+        return server.url
+    return config.stars_page.as_uri()
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     supersede_running_instances()  # last launch wins; never stack duplicates
     config = Config.load()
+
+    server: stars.GalleryServer | None = None
+    if args.serve_stars:
+        server = stars.start_gallery(config, args.publish_stars)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    else:
+        # No server, so the button falls back to `stars.html` — make sure there is
+        # one, and that it matches the list, before anything can click it.
+        stars.write_page(config)
+        if args.publish_stars:
+            _publish_async(config)
+
     display = Gdk.Display.get_default()
     screen = Gdk.Screen.get_default()
     assert display is not None and screen is not None  # GTK is running
@@ -300,10 +411,13 @@ def main() -> None:
         for caption in captions.values():
             caption.window.destroy()
         captions.clear()
+        url = gallery_url(config, server)
         for name, (x, y) in sway_output_positions().items():
             monitor = monitor_at(display, x, y)
             if monitor is not None:
-                captions[name] = Caption(config, monitor, name, font)
+                captions[name] = Caption(
+                    config, monitor, name, font, url, args.publish_stars
+                )
 
     rebuild()
     # react to monitors being plugged/unplugged (artwall is triggered separately,

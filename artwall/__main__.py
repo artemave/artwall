@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 
 from . import stars
 from .app import preview, run, search_entities
@@ -47,13 +46,6 @@ def main(argv: list[str] | None = None) -> None:
         "connected display. Used by the interactive overlay's refresh button.",
     )
     parser.add_argument(
-        "--stars",
-        action="store_true",
-        help="Open the gallery of starred paintings in the browser, and serve it "
-        "until interrupted so paintings can be unstarred from the page. Replaces a "
-        "gallery left running by a previous --stars, rather than adding a second one.",
-    )
-    parser.add_argument(
         "--star",
         metavar="NAME",
         help="Star the painting currently on this Sway output — archiving the image "
@@ -72,16 +64,6 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{qid}\t{label} — {description}")
     elif args.preview:
         preview()
-    elif args.stars:
-        # Serving, not a daemon: the page's buttons post back, so it has to stay up
-        # while you're looking at it. Ctrl-C when you're done — the trash persists.
-        server = stars.serve_gallery()
-        print(f"gallery on {server.url} — Ctrl-C to stop")
-        try:
-            with contextlib.suppress(KeyboardInterrupt):
-                server.serve_forever()
-        finally:
-            server.server_close()
     elif args.star:
         starred = stars.star(output=args.star)
         print("starred" if starred else "unstarred")

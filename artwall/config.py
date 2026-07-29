@@ -20,6 +20,15 @@ STARS_IMAGE_DIR = "images"
 # gallery itself — a removal is only final once you say so — and dot-prefixed so
 # it stays out of the way of the directory you actually look at.
 STARS_TRASH_DIR = ".trash"
+# The publishable copy of the gallery (`--publish`): a self-contained static site
+# under its own subdirectory of `data_dir`, so uploading it can't sweep up
+# `stars.json` or `.trash/` along with the paintings. Everything inside it is
+# derived — deleting it and republishing loses nothing.
+PUBLIC_DIR = "public"
+# Web-sized copies inside the published site. The full-size archives are exported
+# next to them under `STARS_IMAGE_DIR`, and each tile links to one; the grid never
+# loads them, because a page of 2560px scans is tens of megabytes on a phone.
+PUBLIC_THUMB_DIR = "thumbs"
 # WDQS (query service) is only used for the catalogue — it's prone to outages, so
 # keep it off the per-painting hot path. Per-painting data comes from the stable
 # Action API, and images from Commons.
@@ -113,6 +122,10 @@ class Config:
     # Width to archive a starred painting at. Big enough to keep and re-use,
     # small enough not to pull a Commons original (those run to 100+ MB).
     stars_image_width: int = 2560
+    # Longest side of a published site's grid image. Covers a phone's single
+    # ~390pt column at 3x without shipping the archive itself, which is what makes
+    # the published page usable on a cellular connection.
+    public_image_width: int = 1200
     min_interval: float = MIN_INTERVAL
 
     @classmethod
@@ -180,6 +193,36 @@ class Config:
         return self.data_dir / STARS_IMAGE_DIR / f"{key}.jpg"
 
     @property
+    def public_dir(self) -> Path:
+        """The publishable static site (`--publish`). A directory of its own, not
+        `data_dir` itself, because what you upload must not include `stars.json`
+        or the trash — and because everything in here is regenerable."""
+        return self.data_dir / PUBLIC_DIR
+
+    @property
+    def public_page(self) -> Path:
+        """`index.html`, not `stars.html`: a static host serves it for the bare
+        directory URL, which is what a published gallery's link should be."""
+        return self.public_dir / "index.html"
+
+    @property
+    def public_image_dir(self) -> Path:
+        """Full-size paintings inside the published site — same relative layout as
+        `star_image()`, so the page's `<a href>` reads identically either side."""
+        return self.public_dir / STARS_IMAGE_DIR
+
+    @property
+    def public_thumb_dir(self) -> Path:
+        """The web-sized copies the published grid actually loads."""
+        return self.public_dir / PUBLIC_THUMB_DIR
+
+    def public_image(self, key: str) -> Path:
+        return self.public_image_dir / f"{key}.jpg"
+
+    def public_thumb(self, key: str) -> Path:
+        return self.public_thumb_dir / f"{key}.jpg"
+
+    @property
     def trash_dir(self) -> Path:
         return self.data_dir / STARS_TRASH_DIR
 
@@ -193,13 +236,6 @@ class Config:
         """Where `star_image(key)` is parked when unstarred, so restoring returns the
         exact bytes rather than re-downloading them. Same filesystem, so it's a rename."""
         return self.trash_dir / f"{key}.jpg"
-
-    @property
-    def stars_pid(self) -> Path:
-        """PID of the gallery server currently serving, so a fresh `--stars` can
-        replace it. Under `cache_dir`: disposable, and meaningless after a reboot
-        (a recycled PID is caught by checking the process's cmdline, not this file)."""
-        return self.cache_dir / "stars.pid"
 
     @property
     def stamp(self) -> Path:

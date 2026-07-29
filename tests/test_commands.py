@@ -48,6 +48,16 @@ class Commands(unittest.TestCase):
         with self.assertRaises(KeyError):
             commands.compose_command(Path("/tmp/x.jpg"), "x", 100, 100, corner="middle")
 
+    def test_thumbnail_command(self):
+        argv = commands.thumbnail_command(Path("/a/Q1.jpg"), Path("/b/Q1.jpg"), 1200)
+        self.assertEqual(argv[:2], ["magick", "/a/Q1.jpg"])
+        self.assertEqual(argv[-1], "/b/Q1.jpg")  # a new file; the archive is untouched
+        # `>` is what stops a scan smaller than the box being upscaled into a
+        # blurrier, *larger* file than the one it came from
+        self.assertEqual(argv[argv.index("-resize") + 1], "1200x1200>")
+        self.assertIn("-strip", argv)  # nothing on a public site needs the EXIF
+        self.assertEqual(argv[argv.index("-interlace") + 1], "Plane")  # progressive
+
     def test_wallpaper_command(self):
         self.assertEqual(
             commands.wallpaper_command("DP-1", Path("/tmp/current-DP-1.jpg")),

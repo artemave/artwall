@@ -44,6 +44,10 @@ exec 'while :; do swaymsg -t subscribe -m "[\"output\"]" | while read -r _; do /
 exec_always /path/to/artwall/bin/artwall-overlay
 ```
 
+> The overlay also hosts your [gallery](#starring-paintings) and keeps the
+> [published copy](#publishing-the-gallery) in step, both on by default. Opt out
+> with `--no-serve-stars` / `--no-publish-stars`.
+
 > The subscription lines must be **single-quoted as a whole**. Sway's config
 > parser splits an `exec` line on `;`, so an unquoted `… | while read …; do …; done`
 > is rejected at startup (`Unknown/invalid command 'do'`) and rotation silently
@@ -66,7 +70,6 @@ To drive it by hand, from the checkout:
 ```bash
 ./bin/artwall              # set the wallpaper once
 ./bin/artwall --preview    # open a captioned painting without changing the wallpaper
-./bin/artwall --stars      # serve the gallery of paintings you've starred (Ctrl-C to stop)
 ./bin/artwall --find monet # look up Wikidata QIDs for the config (see below)
 ```
 
@@ -77,30 +80,30 @@ State lives under `~/.cache/artwall/`; deleting it is a safe full reset. Your
 ## Starring paintings
 
 In the default `interactive` caption mode, each caption has a **★ button**.
-Click it and the painting is added to your gallery. Open the gallery with:
+Click it and the painting is added to your gallery. The **gallery button** beside
+it opens the collection.
 
-```bash
-./bin/artwall --stars
-# gallery on http://127.0.0.1:41273/ — Ctrl-C to stop
-```
+The overlay hosts that gallery itself, for as long as your session lasts, on a
+port the OS picks. There is nothing to start and nothing to remember to stop —
+it's just always there, behind the button.
 
-It opens in your browser: a masonry of every painting you've kept, newest first.
-Click a painting to open it full size; click its title to read the Wikipedia
-article in a new tab. Each has a **★ in its corner that removes it** from the
-gallery, and an **Undo** appears when you do.
+You get a masonry of every painting you've kept, newest first. Click a painting
+to open it full size; click its title to read the Wikipedia article in a new tab.
+Each has a **★ in its corner that removes it** from the gallery, and an **Undo**
+appears when you do.
 
-That unstar button is why `--stars` runs a little loopback web server and stays
-in the foreground until you Ctrl-C it, rather than just opening a file — a page
-loaded from `file://` can't delete anything. It binds `127.0.0.1` on a port the
-OS picks, serves only your archived paintings, and needs no JavaScript.
+That unstar button is why the gallery is a little loopback web server rather than
+a file the button opens — a page loaded from `file://` can't delete anything. It
+binds `127.0.0.1`, serves only your archived paintings, and needs no JavaScript.
 
-**Running `--stars` again replaces the gallery, it doesn't add a second one.**
-Each server binds its own port, so a forgotten one keeps answering the tab you
-already have open — and, since a long-lived process keeps the code it started
-with, it can go on serving stale behaviour long after you've changed something.
-The new command stops the old server first (its PID is kept in
-`~/.cache/artwall/stars.pid`, and the process is checked to really be a gallery
-before anything is signalled, so a recycled PID is never touched).
+**There is exactly one gallery, structurally.** The overlay is the only thing that
+serves one, and it already replaces any previous instance of itself on launch, so
+two servers answering two ports is not a state this can reach. (It used to be:
+there was a standalone `artwall --stars` you could run twice, and a PID file and a
+SIGTERM dance to stop you. Folding the gallery into the daemon deleted all of it.)
+
+With `--no-serve-stars` nothing listens on a port, and the gallery button opens
+the archived, read-only `stars.html` instead — the same page without the buttons.
 
 ### Adding a painting you found yourself
 
@@ -172,6 +175,7 @@ Everything lives together in `~/.local/share/artwall/`:
 ├── images/
 │   ├── Q20192051.jpg the paintings themselves, archived at 2560px
 │   └── …
+├── public/           the publishable static site (--publish)
 └── .trash/           unstarred paintings, restorable until you empty it
     ├── trash.json    each one's record and the place it held
     └── Q17324036.jpg
@@ -192,6 +196,42 @@ link, since there's no server behind it once the command exits.
 
 Set `stars_image_width` in the config to archive at a different size (default
 `2560`; Commons originals can run past 100 MB, which is why it's capped).
+
+### Publishing the gallery
+
+`stars.html` is for *you* — it lives next to `stars.json` and `.trash/`, so you
+can't upload the directory without publishing the record of every painting you
+ever removed. So the overlay maintains a separate copy that you *can* upload:
+
+```
+~/.local/share/artwall/public/
+├── index.html        the gallery, read-only: a list, nothing that acts on it
+├── thumbs/           web-sized copies — what the page actually loads
+│   └── Q20192051.jpg
+└── images/           the full-size archives each painting links to
+    └── Q20192051.jpg
+```
+
+That's a self-contained static site — no server side, no JavaScript, every path
+relative, so it works from a bare static host, a GitHub Pages repo, or a
+subdirectory of one. Copy the directory up and you're done.
+
+The split matters on a phone: a page of 2560px museum scans is tens of megabytes,
+so the grid loads the thumbnails (`public_image_width`, default `1200` — enough
+for a phone's single column at 3x) and only a tap pulls the full scan. The page
+itself is responsive, dark-mode aware and has no hover-only affordances.
+
+It's rebuilt when the overlay starts and after **every** way a painting can enter
+or leave the collection — starring one from a caption, and unstarring, restoring
+or pasting one in the gallery. Only what changed is rebuilt, and a painting you
+unstarred is *removed* from the site, since otherwise its image would go on being
+served at its own URL long after it stopped appearing on the page.
+
+Two threads can want to publish at once (a gallery request and a star), so builds
+are serialised; one would otherwise delete a painting the other had just written.
+
+If you never publish anything, `--no-publish-stars` skips all of it — worth doing,
+since `public/` holds a second copy of every full-size archive.
 
 ## Configuration
 
@@ -256,7 +296,8 @@ first use, per the note above.) Maintainers regenerate the shipped catalogue wit
   widget (`bin/artwall-overlay`, launched from your Sway config) that shows the
   caption as a clickable link to the painting's Wikipedia article (falling back to
   its Wikidata page), followed by a **★ button** that adds the painting to your
-  [gallery](#starring-paintings) and a **refresh button** that re-rolls the
+  [gallery](#starring-paintings), a **gallery button** that opens the whole
+  collection, and a **refresh button** that re-rolls the
   wallpaper on just that display; nothing is burned into the wallpaper. Because
   it's a Wayland layer-shell surface sitting *just above the wallpaper*, it's
   visible and clickable wherever the desktop is exposed. It needs PyGObject +

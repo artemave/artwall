@@ -10,14 +10,20 @@ overlay already has the whole painting record on screen (`run()` wrote it to
 `caption-<output>.json`), so `star()` never has to look the painting up again —
 it only fetches the image bytes.
 
-**Why `--stars` runs a server.** The overlay's ★ can only unstar the painting
+**Why the gallery is a server.** The overlay's ★ can only unstar the painting
 currently on that display, so the gallery has to be able to remove an older one —
-and a `file://` page cannot delete a file. `serve_gallery()` therefore renders the
+and a `file://` page cannot delete a file. `start_gallery()` therefore renders the
 page over a loopback `http.server` and takes unstar, restore and empty-trash as
 plain form POSTs (no JavaScript; a 303 sends the browser back to `/`). The static
-`stars.html` is still written on every run, without those buttons — nothing would
-answer them once the server is gone, and its job is to make the backed-up
-directory readable anywhere.
+`stars.html` is still written, without those buttons — nothing would answer them
+where there is no server, and its job is to make the backed-up directory readable
+anywhere.
+
+**The overlay owns it.** There is no standalone gallery command, so there is no
+"replace the previous one" dance and no PID file: one overlay (guaranteed by its
+own `supersede_running_instances()`) means one gallery, structurally. `publish()`
+is called from here on every mutation, and from the overlay after a star, which is
+why it takes a lock — those callers are on different threads.
 
 **Unstarring is never destructive.** It *moves* the painting into `.trash/`
 (a rename) and records the position it held, in `trash.json` beside it. So the
@@ -33,19 +39,17 @@ from __future__ import annotations
 import functools
 import html
 import http.server
-import os
 import re
 import shutil
-import signal
 import subprocess
-import time
+import threading
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from . import app, cache, commands, selection, web, wikidata
-from .config import STARS_IMAGE_DIR, Config
+from .config import PUBLIC_THUMB_DIR, STARS_IMAGE_DIR, Config
 
 Star = dict[str, Any]
 # A trashed painting: the record, plus the index it held in the gallery.
@@ -54,10 +58,10 @@ Trashed = dict[str, Any]
 # Loopback only. The gallery can delete your paintings; it is not for the network.
 HOST = "127.0.0.1"
 
-# How long a previous gallery gets to exit after SIGTERM before we give up on it.
-# It serves in the foreground and catches nothing, so it goes at once in practice.
-TERMINATE_TIMEOUT = 5.0
-TERMINATE_POLL = 0.02
+# One publish at a time. Its callers are concurrent — the gallery runs a thread per
+# request, and the overlay publishes on its own thread after a star — and two builds
+# at once would interleave one's `_prune` with the other's copies.
+_PUBLISHING = threading.Lock()
 
 # Masonry geometry, in px — must match `columns`/`column-gap` in CSS, because
 # `_grid()` uses them to cap the container's width (see there for why).
@@ -104,20 +108,26 @@ CSS = """
   :root { --bg: #16161a; --fg: #ececec; --dim: #8f8f96; }
 }
 body {
-  margin: 0; padding: 3rem clamp(1rem, 5vw, 5rem);
+  margin: 0; padding: clamp(1.5rem, 6vw, 3rem) clamp(1rem, 5vw, 5rem);
   background: var(--bg); color: var(--fg);
   font: 16px/1.5 system-ui, sans-serif;
+  /* iOS inflates the font of any block it decides is a narrow column — which is
+     every tile on a phone — so a caption would come out larger than the heading. */
+  -webkit-text-size-adjust: 100%;
 }
 h1 {
-  display: flex; align-items: baseline; gap: 1.5rem;
+  /* wraps rather than overflowing: the heading and the trash link don't fit on
+     one line of a phone, and a heading is not something to scroll sideways for */
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: .4rem 1.5rem;
   font-size: 1.1rem; font-weight: 500; color: var(--dim); margin: 0 0 2.5rem;
 }
 h1 a { color: var(--dim); text-decoration: none; font-size: .9rem; }
-h1 a:hover { color: var(--fg); text-decoration: underline; }
 h1 .spacer { flex: 1; }
 /* Masonry, not a grid: paintings range from wide landscapes to tall portraits,
    and grid rows are as tall as their tallest cell — which strands short works in
-   a pocket of whitespace. Columns let each tile take only the height it needs. */
+   a pocket of whitespace. Columns let each tile take only the height it needs.
+   A phone gets exactly one column of whatever width is left, so the painting is
+   as large as the screen allows without any breakpoint saying so. */
 .grid { columns: 260px; column-gap: 2rem; }
 figure {
   break-inside: avoid;          /* never split a painting across two columns */
@@ -135,33 +145,44 @@ img {
   box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.12);
   transition: box-shadow .15s ease;
 }
-.art:hover img { box-shadow: 0 2px 6px rgba(0,0,0,.28), 0 14px 36px rgba(0,0,0,.2); }
-figcaption { margin-top: .85rem; font-size: .875rem; }
+figcaption { margin-top: .85rem; font-size: .875rem; overflow-wrap: anywhere; }
 figcaption b { display: block; font-weight: 600; }
 figcaption time { color: var(--dim); }
 .title { font-style: italic; color: inherit; text-decoration: none; }
-.title:hover, .title:focus-visible { text-decoration: underline; }
+.title:focus-visible { text-decoration: underline; }
 .empty { color: var(--dim); }
 .trashed img { opacity: .55; }
-.trashed:hover img { opacity: 1; }
 
 /* The corner button: ★ to unstar in the gallery, ⤺ to restore in the trash.
-   Always visible — faintly, so it doesn't compete with the artwork, but never
-   hidden behind a hover you'd have to discover — and solid once you reach it. */
+   Always visible, and 2.75rem square — a finger's worth, not a cursor's. */
 .corner { position: absolute; top: .5rem; right: .5rem; margin: 0; }
 .corner button {
-  display: block; width: 2rem; height: 2rem; padding: 0;
+  display: block; width: 2.75rem; height: 2.75rem; padding: 0;
   border: 0; border-radius: 50%; cursor: pointer;
   background: rgba(0,0,0,.45); color: #fff;
-  font-size: .95rem; line-height: 2rem;
-  opacity: .5; transition: opacity .15s ease, background .15s ease;
+  font-size: 1.1rem; line-height: 2.75rem;
+  transition: opacity .15s ease, background .15s ease;
 }
-figure:hover .corner button { opacity: .85; }
-.corner button:hover, .corner button:focus-visible { opacity: 1; background: rgba(0,0,0,.8); }
+.corner button:focus-visible { opacity: 1; background: rgba(0,0,0,.8); }
+
+/* Hover-only polish, gated: a tap on a touchscreen leaves `:hover` stuck on the
+   thing you tapped, so anything that *reveals* on hover would be revealed on one
+   painting and hidden on the rest for the whole visit. Outside this block those
+   states are simply the resting state, which is why the button is dimmed here
+   rather than brightened — a phone gets it at full strength. */
+@media (hover: hover) {
+  h1 a:hover { color: var(--fg); text-decoration: underline; }
+  .art:hover img { box-shadow: 0 2px 6px rgba(0,0,0,.28), 0 14px 36px rgba(0,0,0,.2); }
+  .title:hover { text-decoration: underline; }
+  .trashed:hover img { opacity: 1; }
+  .corner button { width: 2rem; height: 2rem; font-size: .95rem; line-height: 2rem; opacity: .5; }
+  figure:hover .corner button { opacity: .85; }
+  .corner button:hover { opacity: 1; background: rgba(0,0,0,.8); }
+}
 
 /* The flash: shown once, right after an unstar, a restore or an emptying. */
 .flash {
-  display: flex; align-items: center; gap: .9rem;
+  display: flex; align-items: center; flex-wrap: wrap; gap: .9rem;
   margin: -1.5rem 0 2.5rem; color: var(--dim); font-size: .9rem;
 }
 .flash form { margin: 0; }
@@ -172,9 +193,9 @@ figure:hover .corner button { opacity: .85; }
 
 /* Paste a Wikipedia image link to hang a painting you found yourself. Sits above
    the grid on the served page only — the archived copy has nothing to post to. */
-.add { display: flex; gap: .6rem; margin: 0 0 2.5rem; }
+.add { display: flex; flex-wrap: wrap; gap: .6rem; margin: 0 0 2.5rem; }
 .add input {
-  flex: 1; max-width: 34rem; padding: .4rem .7rem;
+  flex: 1; min-width: 12rem; max-width: 34rem; padding: .4rem .7rem;
   border: 1px solid rgba(128,128,128,.45); border-radius: 4px;
   background: transparent; color: var(--fg); font: inherit;
 }
@@ -372,16 +393,22 @@ def _flash(flash: Flash) -> str:
     return f'<div class="flash"><span>{verb}{named}.</span>{undo}</div>'
 
 
-def _tile(star: Star, src: str, button: str, classes: str = "") -> str:
+def _tile(star: Star, src: str, button: str, classes: str = "", link: str | None = None) -> str:
     """One painting. The image links to the full-size file it was archived as; the
-    title links to its Wikipedia article, in a new tab so the gallery stays put."""
+    title links to its Wikipedia article, in a new tab so the gallery stays put.
+
+    `link` splits those two apart for the published site, where the grid shows a
+    web-sized copy and only the click pulls the multi-megabyte scan. Everywhere
+    else the tile shows the same file it links to.
+    """
     artist = html.escape(star["artist"] or selection.UNKNOWN_ARTIST)
     title = html.escape(star["title"] or selection.UNTITLED)
     date = html.escape(star["date"])
     article = html.escape(star["url"])
     return (
         f'<figure class="{classes}">'
-        f'<a class="art" href="{src}"><img src="{src}" alt="{title}" loading="lazy"></a>'
+        f'<a class="art" href="{link or src}">'
+        f'<img src="{src}" alt="{title}" loading="lazy"></a>'
         f"<figcaption><b>{artist}</b>"
         f'<a class="title" href="{article}" target="_blank" rel="noopener noreferrer">'
         f"{title}</a> <time>{date}</time>"
@@ -413,6 +440,15 @@ def _corner(action: str, glyph: str, label: str) -> str:
     )
 
 
+def _title(stars: list[Star]) -> str:
+    """The gallery's own name for itself — shared by every rendering of it, so the
+    served page, the archived copy and the published site agree."""
+    if not stars:
+        return "★ Starred paintings"
+    plural = "" if len(stars) == 1 else "s"
+    return f"★ {len(stars)} starred painting{plural}"
+
+
 def render_page(
     stars: list[Star],
     interactive: bool = False,
@@ -425,9 +461,8 @@ def render_page(
     page sets it, because both post back and the archived `stars.html` has no
     server behind it. `flash` is the one-shot banner.
     """
+    title = _title(stars)
     if stars:
-        plural = "" if len(stars) == 1 else "s"
-        title = f"★ {len(stars)} starred painting{plural}"
         tiles = [
             _tile(
                 s,
@@ -440,7 +475,6 @@ def render_page(
         ]
         body = _grid(tiles)
     else:
-        title = "★ Starred paintings"
         body = (
             '<p class="empty">Nothing starred yet. Click the ★ next to a wallpaper '
             "caption, or paste a link to a painting you found on Wikipedia.</p>"
@@ -493,6 +527,37 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
     return PAGE.format(title=title, heading=heading, css=CSS, body=body)
 
 
+def render_public(stars: list[Star]) -> str:
+    """The gallery as a page fit for the open internet: a list of paintings, and
+    nothing that acts on them.
+
+    The difference from the archived `stars.html` isn't the buttons — that page
+    has none either — it's the images. Here the grid loads the web-sized copies
+    `publish()` builds under `PUBLIC_THUMB_DIR` and each tile *links* to the
+    full-size archive, so a visitor on a phone downloads a page, not an archive,
+    and still gets the whole scan if they ask for it.
+
+    The empty-state copy is neutral: the desktop page tells you to click the ★ on
+    a wallpaper caption, which means nothing to someone who found this on the web.
+    """
+    title = _title(stars)
+    if stars:
+        body = _grid(
+            [
+                _tile(
+                    s,
+                    f"{PUBLIC_THUMB_DIR}/{s['key']}.jpg",
+                    "",
+                    link=f"{STARS_IMAGE_DIR}/{s['key']}.jpg",
+                )
+                for s in reversed(stars)
+            ]
+        )
+    else:
+        body = '<p class="empty">No paintings here yet.</p>'
+    return PAGE.format(title=title, heading=title, css=CSS, body=body)
+
+
 def write_page(config: Config) -> Path:
     """Write the archived, button-less `stars.html` beside the images it links to,
     so the backed-up directory opens in any browser, on any machine, offline."""
@@ -500,6 +565,81 @@ def write_page(config: Config) -> Path:
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(render_page(load(config)))
     return page
+
+
+# --------------------------------------------------------------------------- #
+# the publishable static site — `--publish`
+# --------------------------------------------------------------------------- #
+
+
+def _stale(source: Path, dest: Path) -> bool:
+    """Whether `dest` still has to be built from `source` — missing, or older.
+
+    Publishing is a build, and a build you re-run should be cheap: without this,
+    every `--publish` re-copies and re-shrinks the whole collection, which is a
+    `magick` process per painting for output that is already correct.
+    """
+    return not dest.exists() or dest.stat().st_mtime < source.stat().st_mtime
+
+
+def _prune(directory: Path, keep: set[str]) -> None:
+    """Delete exported images for paintings that are no longer starred.
+
+    Publishing has to be able to *remove*, not just add: a file left behind here
+    goes on being served at its own URL long after the painting stopped appearing
+    on the page. Only the derived export is touched — the archive it was built
+    from, and the trash, are somewhere else entirely.
+    """
+    for path in directory.glob("*.jpg"):
+        if path.stem not in keep:
+            path.unlink()
+
+
+def publish(
+    config: Config | None = None,
+    runner: Callable[..., object] = subprocess.run,
+) -> Path:
+    """Build the publishable static site under `config.public_dir` and return it.
+
+    A self-contained directory — `index.html`, the web-sized `thumbs/` the page
+    loads, and the full-size `images/` it links to — with nothing in it but the
+    paintings and the page. That separation is the point: `data_dir` also holds
+    `stars.json` and `.trash/`, so uploading *it* would publish the record of
+    every painting you ever removed. Upload this instead; there is no server side
+    to it, no JavaScript, and every link inside is relative, so it works from a
+    bare static host or a subdirectory of one.
+
+    Incremental (`_stale`) and self-cleaning (`_prune`), so the overlay can call it
+    after every change to the collection and pay only for what actually moved.
+
+    Serialised on `_PUBLISHING`, because the callers are concurrent: the gallery
+    runs a thread per request, and the overlay publishes on a thread of its own
+    after a star. Two builds at once would interleave a `_prune` with another
+    build's copies and delete a painting it had just written.
+    """
+    config = config or Config.load()
+    with _PUBLISHING:
+        stars = load(config)
+        keys = {s["key"] for s in stars}
+
+        config.public_image_dir.mkdir(parents=True, exist_ok=True)
+        config.public_thumb_dir.mkdir(parents=True, exist_ok=True)
+        for key in keys:
+            archive = config.star_image(key)
+            if _stale(archive, config.public_image(key)):
+                shutil.copyfile(archive, config.public_image(key))
+            if _stale(archive, config.public_thumb(key)):
+                runner(
+                    commands.thumbnail_command(
+                        archive, config.public_thumb(key), config.public_image_width
+                    ),
+                    check=True,
+                )
+        _prune(config.public_image_dir, keys)
+        _prune(config.public_thumb_dir, keys)
+
+        config.public_page.write_text(render_public(stars))
+    return config.public_dir
 
 
 # --------------------------------------------------------------------------- #
@@ -511,9 +651,23 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
     """Serves the gallery, the trash, their images, and the posts that move
     paintings between them. Nothing else."""
 
-    def __init__(self, *args: Any, config: Config, session: Session, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        config: Config,
+        session: Session,
+        republish: bool = True,
+        runner: Callable[..., object] = subprocess.run,
+        **kwargs: Any,
+    ) -> None:
         self.config = config
         self.session = session
+        # Rebuild the published site after every mutation, so what's on the web
+        # keeps up with what you just removed. On unless you opt out
+        # (`--no-publish-stars`): a published site that silently lags behind the
+        # collection is the failure nobody notices.
+        self.republish = republish
+        self.runner = runner
         super().__init__(*args, **kwargs)
 
     def _send(self, status: int, content_type: str, body: bytes) -> None:
@@ -594,6 +748,9 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
             self._not_found()
             return
         write_page(self.config)  # keep the archived copy in step with the list
+        if self.republish:
+            # and the published site, if we're keeping it live
+            publish(self.config, self.runner)
         self._see_other("/")
 
     def log_message(self, *_args: Any) -> None:
@@ -615,73 +772,27 @@ class GalleryServer(http.server.ThreadingHTTPServer):
         return f"http://{HOST}:{port}/"
 
 
-def _cmdline(pid: int) -> str:
-    """A process's argv, NUL-separated, or "" if it isn't running.
-
-    Read from `/proc` (this is a Sway/Linux tool). Identity, not just liveness:
-    PIDs are recycled, and `stars.pid` can outlive a reboot.
-    """
-    try:
-        return Path(f"/proc/{pid}/cmdline").read_text()
-    except OSError:
-        return ""
-
-
-def is_gallery(cmdline: str) -> bool:
-    """Whether a `/proc` cmdline is an artwall gallery server. Pure."""
-    return "artwall" in cmdline and "--stars" in cmdline
-
-
-def stop_previous(config: Config, timeout: float = TERMINATE_TIMEOUT) -> int | None:
-    """Terminate the gallery server a previous `--stars` left running, if any.
-
-    Running the command again means "show me the gallery", and two servers make
-    that ambiguous: each binds its own port, so the tab you already have open —
-    and the URL you copied — still belong to the *old* one. Worse, a long-lived
-    server keeps the code it started with, so an old process quietly serves
-    stale behaviour long after the source changed. Replacing it is what you meant.
-
-    Returns the PID it stopped, or None if there was nothing to stop.
-    """
-    if not config.stars_pid.exists():
-        return None
-    pid = int(config.stars_pid.read_text())
-    # Not us, and still the process we wrote down — otherwise the file is stale
-    # or its PID has been recycled onto something innocent, and must not be killed.
-    if pid == os.getpid() or not is_gallery(_cmdline(pid)):
-        return None
-
-    # Not guarded against the process exiting between the check above and this
-    # signal: that window is microseconds, and a ProcessLookupError saying so is
-    # more use than a silent branch nothing can test.
-    os.kill(pid, signal.SIGTERM)
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not is_gallery(_cmdline(pid)):
-            return pid
-        time.sleep(TERMINATE_POLL)
-    raise RuntimeError(f"the gallery already running as PID {pid} would not exit")
-
-
-def serve_gallery(
-    config: Config | None = None,
+def start_gallery(
+    config: Config,
+    republish: bool = True,
     runner: Callable[..., object] = subprocess.run,
 ) -> GalleryServer:
-    """Replace any previous gallery, refresh the archived page, then open this one.
+    """Bind a gallery server and refresh the archived page. Nothing is opened.
 
-    Returns the bound server; the caller runs it (`--stars` serves until you
-    interrupt it). It's a command that stays up while you look at it, not a daemon.
+    The overlay is the only caller: it hosts the gallery for its own lifetime and
+    has a button to open it, rather than launching a browser at login.
+
+    **There is no "replace the previous gallery" step, and no PID file.** There
+    used to be, because `artwall --stars` could be run twice and leave two servers
+    answering two ports. One gallery is now structural instead of enforced: the
+    overlay is the only thing that serves one, and `supersede_running_instances()`
+    already guarantees a single overlay.
     """
-    config = config or Config.load()
-    stop_previous(config)
     write_page(config)
-    handler = functools.partial(_Gallery, config=config, session=Session())
-    server = GalleryServer(config, handler)
-    # After binding, so the PID on file always belongs to a server that got up.
-    # Never removed on exit: a crash or a kill -9 would skip that anyway, so the
-    # cmdline check above is what makes a leftover file harmless.
-    config.stars_pid.parent.mkdir(parents=True, exist_ok=True)
-    config.stars_pid.write_text(str(os.getpid()))
-    runner(commands.open_command(server.url), check=True)
-    return server
+    if republish:
+        # start from a site that matches the list, not whatever it was left at
+        publish(config, runner)
+    handler = functools.partial(
+        _Gallery, config=config, session=Session(), republish=republish, runner=runner
+    )
+    return GalleryServer(config, handler)
