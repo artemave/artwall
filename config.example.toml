@@ -45,16 +45,22 @@ caption_pad_y = 64
 caption_mode = "interactive"
 
 # Width to archive a starred painting at, in pixels. Starring downloads the
-# painting into ~/.local/share/artwall/images/ so the gallery (`artwall --stars`)
+# painting into ~/.local/share/artwall/images/ so the gallery
 # is self-contained and can be backed up. Commons originals can exceed 100 MB,
 # hence the cap.
 stars_image_width = 2560
 
-# Longest side of the images the *published* gallery (`artwall --publish`) loads
-# in its grid. The full-size archives above are exported alongside and each tile
-# links to one, so this only bounds the page weight — which is the difference
-# between usable and not on a phone.
+# Longest side of the images the *published* gallery loads in its grid (the
+# overlay maintains it under the data directory's public/). The full-size archives
+# above are exported alongside and each tile links to one, so this only bounds the
+# page weight — which is the difference between usable and not on a phone.
 public_image_width = 1200
+
+# Where you upload public/ to, if you do. Purely a note to yourself: nothing here
+# uploads anything and this is never fetched or checked. Setting it just puts a
+# link to the live site in your own gallery, so the address is somewhere you'll
+# find it. The published page never shows it — it *is* that address.
+# public_url = "https://paintings.example.com/"
 
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).

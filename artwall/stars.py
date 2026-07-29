@@ -123,6 +123,9 @@ h1 {
 }
 h1 a { color: var(--dim); text-decoration: none; font-size: .9rem; }
 h1 .spacer { flex: 1; }
+/* The published address. A URL is long and not the point of the heading, so it
+   sits quieter than the title and wraps rather than pushing anything sideways. */
+.published { font-family: ui-monospace, monospace; font-size: .8rem; overflow-wrap: anywhere; }
 /* Masonry, not a grid: paintings range from wide landscapes to tall portraits,
    and grid rows are as tall as their tallest cell — which strands short works in
    a pocket of whitespace. Columns let each tile take only the height it needs.
@@ -454,12 +457,18 @@ def render_page(
     interactive: bool = False,
     flash: Flash | None = None,
     trash_count: int = 0,
+    public_url: str = "",
 ) -> str:
     """The gallery as one HTML string, newest star first.
 
     `interactive` adds the unstar buttons and the trash link — only the *served*
     page sets it, because both post back and the archived `stars.html` has no
     server behind it. `flash` is the one-shot banner.
+
+    `public_url` (`Config.public_url`) adds a link to wherever you upload the
+    published site. It goes on *both* renderings this function produces — the
+    served gallery and the archived `stars.html` — because both are pages where
+    you are looking at your own collection and might want its public address.
     """
     title = _title(stars)
     if stars:
@@ -483,6 +492,16 @@ def render_page(
     if interactive:
         body = ADD_FORM + body
     heading = title
+    if public_url:
+        # Beside the title rather than out at the right edge: it names this
+        # collection's other address, so it belongs with the collection's name.
+        # Deliberately absent from `render_public()` — that page *is* the live
+        # site, and would only be linking to itself.
+        url = html.escape(public_url)
+        heading += (
+            f'<a class="published" href="{url}" target="_blank" rel="noopener noreferrer">'
+            f"{url} ↗</a>"
+        )
     if interactive and trash_count:
         plural = "" if trash_count == 1 else "s"
         heading += (
@@ -563,12 +582,12 @@ def write_page(config: Config) -> Path:
     so the backed-up directory opens in any browser, on any machine, offline."""
     page = config.stars_page
     page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(render_page(load(config)))
+    page.write_text(render_page(load(config), public_url=config.public_url))
     return page
 
 
 # --------------------------------------------------------------------------- #
-# the publishable static site — `--publish`
+# the publishable static site — maintained by the overlay's `--publish-stars`
 # --------------------------------------------------------------------------- #
 
 
@@ -576,7 +595,7 @@ def _stale(source: Path, dest: Path) -> bool:
     """Whether `dest` still has to be built from `source` — missing, or older.
 
     Publishing is a build, and a build you re-run should be cheap: without this,
-    every `--publish` re-copies and re-shrinks the whole collection, which is a
+    every publish re-copies and re-shrinks the whole collection, which is a
     `magick` process per painting for output that is already correct.
     """
     return not dest.exists() or dest.stat().st_mtime < source.stat().st_mtime
@@ -643,7 +662,7 @@ def publish(
 
 
 # --------------------------------------------------------------------------- #
-# the gallery server — `--stars`
+# the gallery server — hosted by the overlay (`--serve-stars`)
 # --------------------------------------------------------------------------- #
 
 
@@ -701,6 +720,7 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
                     interactive=True,
                     flash=self.session.take_flash(),
                     trash_count=len(load_trash(self.config)),
+                    public_url=self.config.public_url,
                 )
             )
         elif self.path == "/trash":

@@ -9,13 +9,13 @@ files `run()` writes (`caption-<output>.json`) and updates whenever they change.
 
 **This is the daemon, so this is where the gallery's lifetime belongs.** With
 `--serve-stars` the overlay binds the gallery server itself, on a background
-thread, for as long as it runs — so the collection is always one click away and
-`artwall --stars` (a foreground command you have to remember to start, and Ctrl-C)
-is no longer the only way to reach it. With `--publish-stars` it also keeps the
-published static site in step: the gallery's own buttons republish in-process, and
-a star from the overlay republishes once the `--star` child exits. Between those
-two paths every way a painting can enter or leave the collection is covered, which
-is the thing a one-shot `--publish` cannot promise.
+thread, for as long as it runs — so the collection is always one click away, with
+no foreground command to start and remember to Ctrl-C. With `--publish-stars` it
+also keeps the published static site in step: the gallery's own buttons republish
+in-process, and a star republishes once the `--star` child exits. Between those
+two paths every way a painting can enter or leave the collection is covered —
+which is the thing no one-shot command could have promised, since the two paths
+live in different processes.
 
 This is the one component that needs a GUI toolkit (PyGObject + gtk-layer-shell)
 and a long-lived process, so it lives outside the stdlib-only oneshot and is

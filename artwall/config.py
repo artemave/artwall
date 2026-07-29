@@ -20,7 +20,7 @@ STARS_IMAGE_DIR = "images"
 # gallery itself — a removal is only final once you say so — and dot-prefixed so
 # it stays out of the way of the directory you actually look at.
 STARS_TRASH_DIR = ".trash"
-# The publishable copy of the gallery (`--publish`): a self-contained static site
+# The publishable copy of the gallery (`--publish-stars`): a self-contained site
 # under its own subdirectory of `data_dir`, so uploading it can't sweep up
 # `stars.json` or `.trash/` along with the paintings. Everything inside it is
 # derived — deleting it and republishing loses nothing.
@@ -126,6 +126,11 @@ class Config:
     # ~390pt column at 3x without shipping the archive itself, which is what makes
     # the published page usable on a cellular connection.
     public_image_width: int = 1200
+    # Where you upload `public_dir` to, if you do. Purely a note to yourself:
+    # nothing here uploads anything, so this is never checked or fetched — setting
+    # it only puts a link to the live site in your own gallery, so the address is
+    # somewhere you'll find it. Empty means no link is shown.
+    public_url: str = ""
     min_interval: float = MIN_INTERVAL
 
     @classmethod
@@ -194,7 +199,7 @@ class Config:
 
     @property
     def public_dir(self) -> Path:
-        """The publishable static site (`--publish`). A directory of its own, not
+        """The publishable static site. A directory of its own, not
         `data_dir` itself, because what you upload must not include `stars.json`
         or the trash — and because everything in here is regenerable."""
         return self.data_dir / PUBLIC_DIR

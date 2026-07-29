@@ -128,6 +128,35 @@ class RenderPage(unittest.TestCase):
         one = stars.render_page(stars_, interactive=True, trash_count=1)
         self.assertIn("Trash (1 painting)</a>", one)
 
+    def test_the_published_address_is_shown_when_configured(self):
+        page = stars.render_page([star_of(101)], public_url="https://art.example.com/")
+        self.assertIn(
+            '<a class="published" href="https://art.example.com/" '
+            'target="_blank" rel="noopener noreferrer">https://art.example.com/ ↗</a>',
+            page,
+        )
+
+    def test_no_link_when_no_address_is_configured(self):
+        # the default: nothing published, nothing to point at. Matched on the
+        # markup, not the word — the shared CSS carries a `.published` rule.
+        self.assertNotIn('<a class="published"', stars.render_page([star_of(101)]))
+
+    def test_the_archived_page_carries_it_too(self):
+        # stars.html is also a page where you're looking at your own collection
+        page = stars.render_page([star_of(101)], interactive=False, public_url="https://x.test/")
+        self.assertIn('href="https://x.test/"', page)
+
+    def test_it_is_shown_on_an_empty_gallery_as_well(self):
+        self.assertIn('href="https://x.test/"', stars.render_page([], public_url="https://x.test/"))
+
+    def test_the_address_is_escaped(self):
+        page = stars.render_page([], public_url='https://x.test/"><script>alert(1)</script>')
+        self.assertNotIn("<script>", page)
+
+    def test_the_published_page_does_not_link_to_itself(self):
+        # render_public IS the live site; a link back to its own address is noise
+        self.assertNotIn('<a class="published"', stars.render_public([star_of(101)]))
+
     def test_the_archived_page_never_links_to_the_trash(self):
         # nothing would serve /trash once the command exits
         page = stars.render_page([star_of(101)], interactive=False, trash_count=3)

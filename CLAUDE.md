@@ -81,9 +81,13 @@ it can be tested without network or `swaymsg`.
   portable and backup-able; `trash_dir`/`trash_file`/`trash_image(qid)` hold
   unstarred paintings until the trash is emptied. `public_dir` (+ `public_page`,
   `public_image_dir`/`public_image(key)`, `public_thumb_dir`/`public_thumb(key)`,
-  `public_image_width`) is the published-site export: **a subdirectory rather than
+  `public_image_width`, `public_url`) is the published-site export: **a subdirectory rather than
   `data_dir` itself**, because uploading `data_dir` would publish `stars.json`
   and the whole trash — the record of every painting you ever removed.
+  `public_url` is inert: never fetched, never checked, it only puts a link to the
+  live site in `render_page()` — *both* its renderings, since the served gallery
+  and the archived `stars.html` are alike pages where you look at your own
+  collection. `render_public()` deliberately omits it: that page is that address.
   The field defaults
   are the built-ins; `Config.load(path)` overlays the user's TOML (`config_file()`
   → `$XDG_CONFIG_HOME/artwall/config.toml`), passing keys straight to the
