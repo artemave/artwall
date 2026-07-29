@@ -32,12 +32,28 @@ COMMONS_PAGE_OFFSET = 9000
 FILE_TITLE = re.compile(r"^File:Q(\d+)\.jpg$")
 
 
+def select_labels(store, params):
+    """Mimic `wbgetentities`' label filtering, fallback chain included.
+
+    Only the requested language comes back, and a `mul` label — Wikidata's
+    language-agnostic one, all many artists have — reaches the caller *only* if
+    `languagefallback` was asked for, keyed under the requested language.
+    """
+    language = params["languages"][0]
+    if language in store:
+        return {language: store[language]}
+    if params.get("languagefallback") and "mul" in store:
+        return {language: {**store["mul"], "language": "mul", "for-language": language}}
+    return {}
+
+
 def wikidata_router(
     qids,
     missing=(),
     anonymous=(),
     no_article=(),
     artist_article=None,
+    unnamed_artist=False,
     unknown_files=(),
     unlinked_files=(),
     not_paintings=(),
@@ -51,6 +67,8 @@ def wikidata_router(
     cached) so the caller re-picks; `anonymous` QIDs have no creator; `no_article`
     QIDs have no Wikipedia sitelink; `artist_article` (a URL) gives the shared
     creator a Wikipedia article, so the link can fall back from painting to artist.
+    `unnamed_artist` files the creator's name under `mul` and nowhere else, as
+    Wikidata does for a name that isn't translated.
 
     The Commons side backs `resolve_link()`: `unknown_files` aren't on Commons at
     all (as in-copyright art isn't), `unlinked_files` are there but name no artwork,
@@ -124,12 +142,15 @@ def wikidata_router(
         if parsed.path == "/api":  # wbgetentities for a painting or its creator
             eid = params["ids"][0]
             if eid == "Q999":  # the shared creator
-                creator = {"labels": {"en": {"value": "Tester"}}}
+                language = "mul" if unnamed_artist else "en"
+                creator = {"labels": {language: {"value": "Tester"}}}
                 if artist_article:
                     creator["sitelinks"] = {"enwiki": {"url": artist_article}}
                 body = {"entities": {"Q999": creator}}
             else:
                 body = {"entities": {eid: entity(int(eid[1:]))}}
+            for ent in body["entities"].values():
+                ent["labels"] = select_labels(ent["labels"], params)
             return 200, "application/json", json.dumps(body).encode()
         if parsed.path.startswith("/img/"):
             return 200, "image/jpeg", IMAGE_BYTES
@@ -270,6 +291,27 @@ class RunTests(unittest.TestCase):
         compose_argv = runner.calls[0][0]
         caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
         self.assertIn("Unknown artist", caption_arg)  # no creator -> caption default
+
+    def test_an_artist_named_only_in_mul_is_still_credited(self):
+        """A creator whose name is filed under `mul` and no real language is named,
+        not anonymous — asking for `en` alone got "Unknown artist" on a painting
+        whose own Wikidata page reads "John Paul Selinger" (Q22002875)."""
+        router = wikidata_router([101], unnamed_artist=True)
+        with serve(router) as s:
+            router.base = s.base_url
+            runner = Recorder()
+            app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        compose_argv = runner.calls[0][0]
+        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
+        self.assertIn("Tester", caption_arg)
+        self.assertNotIn("Unknown artist", caption_arg)
 
     def test_raises_when_no_painting_is_usable(self):
         router = wikidata_router([101, 102], missing={101, 102})

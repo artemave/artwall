@@ -98,6 +98,17 @@ def dump_catalogue() -> Path:  # pragma: no cover - hits WDQS, writes packaged d
 
 
 def _get_entity(config: Config, entity_id: str, props: str) -> dict[str, Any]:
+    """One `wbgetentities` call, labels narrowed to `config.language`.
+
+    `languagefallback` matters: Wikidata stores a name that is spelled the same
+    everywhere under the pseudo-language `mul` rather than duplicating it into
+    300 languages, so plenty of artists have *no* label in any real language
+    (Q22002875 — John Paul Selinger — has only `mul`). Asked for `en` alone the
+    API answers with an empty `labels`, and the painting gets captioned "Unknown
+    artist" while its own page plainly names the man. With the flag the API walks
+    the fallback chain server-side and returns the result still keyed under the
+    requested language, so `wikidata.label()` needs to know none of this.
+    """
     result: dict[str, Any] = web.get_json(
         config.api_url,
         {
@@ -105,6 +116,7 @@ def _get_entity(config: Config, entity_id: str, props: str) -> dict[str, Any]:
             "ids": entity_id,
             "props": props,
             "languages": config.language,
+            "languagefallback": "1",
             "format": "json",
         },
     )
