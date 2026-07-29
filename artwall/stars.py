@@ -117,18 +117,9 @@ class Session:
 BG_LIGHT, BG_DARK = "#fbfbf9", "#16161a"
 
 CSS = """
-:root {
-  color-scheme: light dark;
-  --bg: #fbfbf9; --fg: #1a1a1a; --dim: #6b6b6b;
-  /* the page background darkened 5% — the same size of step as dark's, mirrored */
-  --band: #eeeeed;
-}
+:root { color-scheme: light dark; --bg: #fbfbf9; --fg: #1a1a1a; --dim: #6b6b6b; }
 @media (prefers-color-scheme: dark) {
-  /* --band is *measured*, off mobile Firefox on iOS: it is what #16161a becomes
-     under that browser's toolbar. Fitting band = bg + a(255 - bg) to those pixels
-     gives a = 0.090 on red and green, 0.109 on blue — a light layer at ~9%,
-     cool-biased. So it is tied to --bg: change the background and re-measure. */
-  :root { --bg: #16161a; --fg: #ececec; --dim: #8f8f96; --band: #2b2a32; }
+  :root { --bg: #16161a; --fg: #ececec; --dim: #8f8f96; }
 }
 /* On the root as well as the body. iOS paints the strip behind Safari's toolbar
    and the home indicator from the *canvas* background, which comes from the root
@@ -234,19 +225,10 @@ figcaption time { color: var(--dim); }
 .danger { margin: 0; }
 .danger button { background: #a4302c; color: #fff; }
 
-/* Published page only: who made the thing you're looking at.
-   Full-bleed and in its own colour, which is doing two jobs. It closes the page
-   deliberately rather than letting the paintings just stop; and where a browser
-   draws its own strip below the page (mobile Firefox does, outside the page box
-   where no stylesheet reaches), the band meets it instead of leaving a seam.
-   The negative margins cancel body's padding so it reaches all four edges, and
-   the padding puts the text back where the rest of the page's text sits. */
-footer {
-  margin: 3.5rem calc(-1 * clamp(1rem, 5vw, 5rem)) calc(-1 * clamp(1.5rem, 6vw, 3rem));
-  padding: 1.35rem clamp(1rem, 5vw, 5rem);
-  background: var(--band);
-  color: var(--dim); font-size: .85rem;
-}
+/* Published page only: who made the thing you're looking at. Quiet, and clear of
+   the last row of paintings — a masonry's columns end at different heights, so it
+   needs real space above it rather than a hairline rule. */
+footer { margin: 3.5rem 0 0; color: var(--dim); font-size: .85rem; }
 footer a { color: inherit; }
 """
 
