@@ -406,6 +406,12 @@ class RenderPublic(unittest.TestCase):
             page,
         )
 
+    def test_the_footer_is_a_band_of_its_own_colour(self):
+        # it closes the page deliberately, and meets the strip a mobile browser
+        # draws below the page rather than leaving a seam against it
+        self.assertIn("background: var(--band);", stars.CSS)
+        self.assertIn("--band: #2b2a32;", stars.CSS)  # measured, see the CSS comment
+
     def test_the_empty_page_is_credited_too(self):
         self.assertIn("<footer>", stars.render_public([]))
 
@@ -419,9 +425,10 @@ class RenderPublic(unittest.TestCase):
         self.assertIn("<title>★ 1 starred painting</title>", stars.render_page([star_of(101)]))
 
     def test_the_theme_colour_is_the_page_background(self):
-        # Safari paints its own chrome from theme-color. Told nothing, it derives a
-        # near-miss of its own (a ~9% light layer over the page) and the gallery ends
-        # in a visibly paler band. Told the background, the seam disappears.
+        # Safari paints its own chrome from theme-color, so telling it the page
+        # background removes the paler strip it would otherwise show. (Mobile Firefox
+        # ignores this and draws its own strip regardless — the footer band is what
+        # meets that one.)
         for page in (stars.render_public([]), stars.render_page([]), stars.render_trash([])):
             self.assertIn(
                 '<meta name="theme-color" media="(prefers-color-scheme: light)" '
