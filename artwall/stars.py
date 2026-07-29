@@ -110,6 +110,12 @@ class Session:
         return flash
 
 
+# The page background per colour scheme, handed to Safari as `theme-color` so it
+# paints its own chrome to match instead of deriving a near-miss of its own. These
+# must stay equal to `--bg` in the CSS below; `test_the_theme_colour_is_the_page
+# _background` pins them together, since a drift would show as a seam only on a phone.
+BG_LIGHT, BG_DARK = "#fbfbf9", "#16161a"
+
 CSS = """
 :root { color-scheme: light dark; --bg: #fbfbf9; --fg: #1a1a1a; --dim: #6b6b6b; }
 @media (prefers-color-scheme: dark) {
@@ -230,12 +236,18 @@ PAGE = """<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="{light}">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="{dark}">
 <title>{title}</title>
 <style>{css}</style>
 <h1>{heading}</h1>
 {body}
 </html>
 """
+
+
+# Every page declares the same scheme colours; only the body differs.
+_SCHEME = {"light": BG_LIGHT, "dark": BG_DARK}
 
 
 # --------------------------------------------------------------------------- #
@@ -529,7 +541,7 @@ def render_page(
         )
     if flash:
         body = _flash(flash) + body
-    return PAGE.format(title=title, heading=heading, css=CSS, body=body)
+    return PAGE.format(**_SCHEME, title=title, heading=heading, css=CSS, body=body)
 
 
 def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
@@ -562,7 +574,7 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
     heading = f'<a href="/">← Gallery</a>{title}<span class="spacer"></span>{empty}'
     if flash:
         body = _flash(flash) + body
-    return PAGE.format(title=title, heading=heading, css=CSS, body=body)
+    return PAGE.format(**_SCHEME, title=title, heading=heading, css=CSS, body=body)
 
 
 def render_public(stars: list[Star]) -> str:
@@ -600,7 +612,9 @@ def render_public(stars: list[Star]) -> str:
         f'<footer>Starred with <a href="{ARTWALL_URL}" '
         f'target="_blank" rel="noopener noreferrer">artwall</a></footer>'
     )
-    return PAGE.format(title=PUBLIC_TITLE, heading=_title(stars), css=CSS, body=body)
+    return PAGE.format(
+        **_SCHEME, title=PUBLIC_TITLE, heading=_title(stars), css=CSS, body=body
+    )
 
 
 def write_page(config: Config) -> Path:

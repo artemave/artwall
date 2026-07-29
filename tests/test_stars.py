@@ -418,6 +418,27 @@ class RenderPublic(unittest.TestCase):
     def test_the_local_pages_keep_their_own_title(self):
         self.assertIn("<title>★ 1 starred painting</title>", stars.render_page([star_of(101)]))
 
+    def test_the_theme_colour_is_the_page_background(self):
+        # Safari paints its own chrome from theme-color. Told nothing, it derives a
+        # near-miss of its own (a ~9% light layer over the page) and the gallery ends
+        # in a visibly paler band. Told the background, the seam disappears.
+        for page in (stars.render_public([]), stars.render_page([]), stars.render_trash([])):
+            self.assertIn(
+                '<meta name="theme-color" media="(prefers-color-scheme: light)" '
+                f'content="{stars.BG_LIGHT}">',
+                page,
+            )
+            self.assertIn(
+                '<meta name="theme-color" media="(prefers-color-scheme: dark)" '
+                f'content="{stars.BG_DARK}">',
+                page,
+            )
+
+    def test_the_theme_colour_cannot_drift_from_the_css(self):
+        # two declarations of one colour, and only a phone would show them differing
+        self.assertIn(f"--bg: {stars.BG_LIGHT};", stars.CSS)
+        self.assertIn(f"--bg: {stars.BG_DARK};", stars.CSS)
+
     def test_the_root_carries_the_background_not_just_the_body(self):
         # iOS paints the strip behind its toolbar from the canvas background, which
         # comes from the root element. Set on <body> alone, a dark gallery ends in a
