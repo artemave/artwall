@@ -621,9 +621,12 @@ def render_page(
     `sync_pending` (`sync_pending()`) disables it when there's nothing to send.
 
     `owner` (`Config.owner`) names whose collection this is in the heading —
-    see `_title()`.
+    see `_title()`. The browser tab gets the count-free form regardless
+    (`_title([], owner)`) — same reasoning as `render_public()`'s `PUBLIC_TITLE`:
+    a tab or a bookmark wants something that doesn't change on every star.
     """
-    title = _title(stars, owner)
+    tab_title = _title([], owner)
+    heading = _title(stars, owner)
     if stars:
         tiles = [
             _tile(
@@ -644,7 +647,6 @@ def render_page(
 
     if interactive:
         body = ADD_FORM + body
-    heading = title
     if public_url:
         # Beside the title rather than out at the right edge: it names this
         # collection's other address, so it belongs with the collection's name.
@@ -669,7 +671,7 @@ def render_page(
         heading += f'<span class="spacer"></span>{right}'
     if flash:
         body = _flash(flash) + body
-    return PAGE.format(**_SCHEME, title=title, heading=heading, css=CSS, body=body)
+    return PAGE.format(**_SCHEME, title=tab_title, heading=heading, css=CSS, body=body)
 
 
 def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:

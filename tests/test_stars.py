@@ -485,8 +485,20 @@ class RenderPublic(unittest.TestCase):
         self.assertNotIn("<footer>", stars.render_page([star_of(101)]))
         self.assertNotIn("<footer>", stars.render_trash([]))
 
-    def test_the_local_pages_keep_their_own_title(self):
-        self.assertIn("<title>★ 1 starred painting</title>", stars.render_page([star_of(101)]))
+    def test_the_tab_title_does_not_carry_the_count(self):
+        # same reasoning as render_public()'s PUBLIC_TITLE: a tab or a bookmark
+        # wants something that doesn't change on every star
+        one = stars.render_page([star_of(101)])
+        two = stars.render_page([star_of(101), star_of(102)])
+        self.assertIn("<title>★ Starred paintings</title>", one)
+        self.assertIn("<title>★ Starred paintings</title>", two)
+        self.assertIn("★ 1 starred painting<", one)  # the heading still counts
+        self.assertIn("★ 2 starred paintings<", two)
+
+    def test_the_tab_title_with_an_owner_names_them_but_not_the_count(self):
+        page = stars.render_page([star_of(101), star_of(102)], owner="Alex")
+        self.assertIn("<title>★ Alex starred paintings</title>", page)
+        self.assertIn("★ Alex starred 2 paintings<", page)
 
     def test_the_theme_colour_is_the_page_background(self):
         # Safari paints its own chrome from theme-color. Told nothing, it derives a
