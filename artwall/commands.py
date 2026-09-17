@@ -106,3 +106,33 @@ def open_command(target: str | Path) -> list[str]:
     """Hand a file or URL to the desktop's default handler — the preview image, or
     the star gallery's loopback URL (which lands in a browser)."""
     return ["xdg-open", str(target)]
+
+
+def git_diff_cached_command(data_dir: Path) -> list[str]:
+    """Exit 0 if nothing is staged, 1 if something is — the check that decides
+    whether `sync()` has anything to commit."""
+    return ["git", "-C", str(data_dir), "diff", "--cached", "--quiet"]
+
+
+def git_status_porcelain_command(data_dir: Path) -> list[str]:
+    """Machine-readable status — empty output means a clean working tree."""
+    return ["git", "-C", str(data_dir), "status", "--porcelain"]
+
+
+def git_unpushed_count_command(data_dir: Path) -> list[str]:
+    """How many local commits `HEAD` has that `@{u}` (the upstream branch)
+    doesn't. Fails if there's no upstream ref to compare against yet — which
+    `sync_pending()` treats the same as "there's something to push"."""
+    return ["git", "-C", str(data_dir), "rev-list", "--count", "@{u}..HEAD"]
+
+
+def git_add_command(data_dir: Path) -> list[str]:
+    return ["git", "-C", str(data_dir), "add", "-A"]
+
+
+def git_commit_command(data_dir: Path, message: str) -> list[str]:
+    return ["git", "-C", str(data_dir), "commit", "-m", message]
+
+
+def git_push_command(data_dir: Path) -> list[str]:
+    return ["git", "-C", str(data_dir), "push"]

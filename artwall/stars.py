@@ -61,6 +61,11 @@ HOST = "127.0.0.1"
 # Credited in the published page's footer. Not a config key: it names artwall
 # itself, not anything about this collection or where it's hosted.
 ARTWALL_URL = "https://github.com/artemave/artwall"
+# Also credited there: every painting's data comes from Wikidata and its image
+# from Wikimedia Commons, and a stranger who found this page has no other way
+# to know that.
+WIKIDATA_URL = "https://www.wikidata.org/"
+WIKIMEDIA_COMMONS_URL = "https://commons.wikimedia.org/"
 # The published page's <title>. The heading still counts the paintings, but a
 # browser tab, a bookmark and a search result want the name of the thing, not a
 # number that changes every time you star something.
@@ -85,6 +90,15 @@ IMAGE_PATH = re.compile(rf"^/{STARS_IMAGE_DIR}/(?P<key>{KEY})\.jpg$")
 TRASH_IMAGE_PATH = re.compile(rf"^/trash/images/(?P<key>{KEY})\.jpg$")
 UNSTAR_PATH = re.compile(rf"^/unstar/(?P<key>{KEY})$")
 RESTORE_PATH = re.compile(rf"^/restore/(?P<key>{KEY})$")
+
+
+class SyncError(Exception):
+    """A commit-and-push that didn't reach the remote.
+
+    Carries git's own stderr, so the gallery can show *why* — no remote
+    configured, no network, a rejected non-fast-forward — rather than a bare
+    "failed" to whoever clicked the button.
+    """
 
 
 class Flash(NamedTuple):
@@ -117,9 +131,19 @@ class Session:
 BG_LIGHT, BG_DARK = "#fbfbf9", "#16161a"
 
 CSS = """
-:root { color-scheme: light dark; --bg: #fbfbf9; --fg: #1a1a1a; --dim: #6b6b6b; }
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbf9; --fg: #1a1a1a; --dim: #6b6b6b; --line: rgba(20,20,20,.28);
+  --danger: #a4302c;
+}
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #16161a; --fg: #ececec; --dim: #8f8f96; }
+  /* a dustier coral, not the light mode red: that red is close to invisible
+     against near-black, and a brighter one would be the one loud thing on an
+     otherwise quiet page */
+  :root {
+    --bg: #16161a; --fg: #ececec; --dim: #8f8f96;
+    --line: rgba(255,255,255,.28); --danger: #d9776f;
+  }
 }
 /* On the root as well as the body. iOS paints the strip behind Safari's toolbar
    and the home indicator from the *canvas* background, which comes from the root
@@ -200,6 +224,12 @@ figcaption time { color: var(--dim); }
   .corner button { width: 2rem; height: 2rem; font-size: .95rem; line-height: 2rem; opacity: .5; }
   figure:hover .corner button { opacity: .85; }
   .corner button:hover { opacity: 1; background: rgba(0,0,0,.8); }
+  .flash button:hover, .add button:hover, .sync button:not(:disabled):hover {
+    background: var(--fg); color: var(--bg); border-color: var(--fg);
+  }
+  .danger button:hover {
+    background: var(--danger); color: var(--bg); border-color: var(--danger);
+  }
 }
 
 /* The flash: shown once, right after an unstar, a restore or an emptying. */
@@ -208,9 +238,14 @@ figcaption time { color: var(--dim); }
   margin: -1.5rem 0 2.5rem; color: var(--dim); font-size: .9rem;
 }
 .flash form { margin: 0; }
-.flash button, .danger button, .add button {
-  border: 0; border-radius: 4px; padding: .35rem .9rem; cursor: pointer;
-  background: var(--fg); color: var(--bg); font: inherit; font-weight: 600;
+/* Quiet by default — an outline, not a filled block, so the paintings stay the
+   only solid thing on the page. Each fills in only on hover (below), the same
+   dim-until-touched treatment as the corner button. */
+.flash button, .danger button, .add button, .sync button {
+  border: 1px solid var(--line); border-radius: 2px; /* the images' own radius */
+  padding: .3rem .8rem; cursor: pointer;
+  background: transparent; color: var(--fg); font: inherit; font-weight: 500;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
 
 /* Paste a Wikipedia image link to hang a painting you found yourself. Sits above
@@ -218,17 +253,23 @@ figcaption time { color: var(--dim); }
 .add { display: flex; flex-wrap: wrap; gap: .6rem; margin: 0 0 2.5rem; }
 .add input {
   flex: 1; min-width: 12rem; max-width: 34rem; padding: .4rem .7rem;
-  border: 1px solid rgba(128,128,128,.45); border-radius: 4px;
+  border: 1px solid var(--line); border-radius: 2px;
   background: transparent; color: var(--fg); font: inherit;
 }
 .add input:focus-visible { outline: 2px solid var(--fg); outline-offset: -1px; }
 .danger { margin: 0; }
-.danger button { background: #a4302c; color: #fff; }
+.danger button { color: var(--danger); border-color: var(--danger); }
+.sync { margin: 0; }
+.sync button:disabled { opacity: .4; border-color: var(--line); cursor: default; }
 
 /* Published page only: who made the thing you're looking at. Quiet, and clear of
    the last row of paintings — a masonry's columns end at different heights, so it
-   needs real space above it rather than a hairline rule. */
-footer { margin: 3.5rem 0 0; color: var(--dim); font-size: .85rem; }
+   needs real space above it rather than a hairline rule. Centered, unlike the
+   rest of the (left-aligned) page: it's a closing note, not part of the content
+   flow the grid and heading belong to. */
+footer { margin: 3.5rem 0 0; color: var(--dim); font-size: .85rem; text-align: center; }
+footer p { margin: 0 0 .35rem; }
+footer p:last-child { margin-bottom: 0; }
 footer a { color: inherit; }
 """
 
@@ -390,6 +431,67 @@ def empty_trash(config: Config) -> int:
     return count
 
 
+def is_git_repo(config: Config) -> bool:
+    """Whether `data_dir` is a git working tree — what turns on the gallery's
+    "Sync" button.
+
+    A non-tech user gets one by cloning the artwall gallery template into
+    `data_dir` in the first place (it ships a `.gitignore` for `.trash/`, so a
+    plain `sync()` never pushes the record of a removed painting, and a
+    GitHub Action that deploys `public/`). Nothing here creates the repo or
+    configures a remote — it only detects one that's already there.
+    """
+    return (config.data_dir / ".git").exists()
+
+
+def sync_pending(config: Config) -> bool:
+    """Whether `sync()` would actually do anything — a dirty working tree, or a
+    commit already made that hasn't reached the remote. What disables the
+    gallery's ⇪ Sync button, so there's nothing to click when there's nothing
+    to send.
+
+    An unresolvable upstream (`git_unpushed_count_command` fails — no push has
+    ever reached the remote yet) counts as pending too, rather than being read
+    as "0 ahead": nothing has gone out, so there's definitely something to.
+    """
+    data_dir = config.data_dir
+    status = subprocess.run(
+        commands.git_status_porcelain_command(data_dir), capture_output=True, text=True, check=True
+    )
+    if status.stdout.strip():
+        return True
+    ahead = subprocess.run(
+        commands.git_unpushed_count_command(data_dir), capture_output=True, text=True
+    )
+    return ahead.returncode != 0 or ahead.stdout.strip() != "0"
+
+
+def sync(config: Config) -> None:
+    """Commit and push whatever changed under `data_dir`, for a button a
+    non-tech user can click instead of learning git.
+
+    Whatever `git add -A` stages is committed; if nothing changed, the commit
+    is skipped rather than left to fail on "nothing to commit"
+    (`commands.git_diff_cached_command`, checked by exit code with `--quiet`
+    rather than by parsing output). The push always runs regardless — an
+    earlier sync's commit may have reached this point but not the remote, and
+    a no-op push finds that out for free. A failure is reported back with
+    git's own stderr rather than raised past the web handler that calls this
+    from a form a non-tech user just clicked.
+    """
+    if not is_git_repo(config):
+        raise SyncError("no git repository here to sync")
+    data_dir = config.data_dir
+    subprocess.run(commands.git_add_command(data_dir), check=True)
+    if subprocess.run(commands.git_diff_cached_command(data_dir)).returncode != 0:
+        subprocess.run(
+            commands.git_commit_command(data_dir, "Sync starred paintings"), check=True
+        )
+    push = subprocess.run(commands.git_push_command(data_dir), capture_output=True, text=True)
+    if push.returncode != 0:
+        raise SyncError(push.stderr.strip() or "git push failed")
+
+
 # --------------------------------------------------------------------------- #
 # rendering — pure: markup in, no IO
 # --------------------------------------------------------------------------- #
@@ -474,13 +576,23 @@ def _corner(action: str, glyph: str, label: str) -> str:
     )
 
 
-def _title(stars: list[Star]) -> str:
+def _title(stars: list[Star], owner: str = "") -> str:
     """The gallery's own name for itself — shared by every rendering of it, so the
-    served page, the archived copy and the published site agree."""
-    if not stars:
+    served page, the archived copy and the published site agree.
+
+    The ★ that marks a starred painting everywhere else on the page always
+    leads. `owner` (`Config.owner`) names whose collection it is; with none
+    configured, it's just the count.
+    """
+    count = len(stars)
+    plural = "" if count == 1 else "s"
+    if owner:
+        if not count:
+            return f"★ {owner} starred paintings"
+        return f"★ {owner} starred {count} painting{plural}"
+    if not count:
         return "★ Starred paintings"
-    plural = "" if len(stars) == 1 else "s"
-    return f"★ {len(stars)} starred painting{plural}"
+    return f"★ {count} starred painting{plural}"
 
 
 def render_page(
@@ -489,6 +601,9 @@ def render_page(
     flash: Flash | None = None,
     trash_count: int = 0,
     public_url: str = "",
+    git_sync: bool = False,
+    sync_pending: bool = True,
+    owner: str = "",
 ) -> str:
     """The gallery as one HTML string, newest star first.
 
@@ -500,8 +615,15 @@ def render_page(
     published site. It goes on *both* renderings this function produces — the
     served gallery and the archived `stars.html` — because both are pages where
     you are looking at your own collection and might want its public address.
+
+    `git_sync` adds the "Sync" button (`is_git_repo()`) — served only, like the
+    trash link, since it posts to a route the archived page has no server for.
+    `sync_pending` (`sync_pending()`) disables it when there's nothing to send.
+
+    `owner` (`Config.owner`) names whose collection this is in the heading —
+    see `_title()`.
     """
-    title = _title(stars)
+    title = _title(stars, owner)
     if stars:
         tiles = [
             _tile(
@@ -533,12 +655,18 @@ def render_page(
             f'<a class="published" href="{url}" target="_blank" rel="noopener noreferrer">'
             f"{url} ↗</a>"
         )
+    right = ""
+    if interactive and git_sync:
+        disabled = "" if sync_pending else " disabled"
+        right += (
+            '<form class="sync" method="post" action="/sync">'
+            f'<button type="submit"{disabled}>⇪ Sync</button></form>'
+        )
     if interactive and trash_count:
         plural = "" if trash_count == 1 else "s"
-        heading += (
-            f'<span class="spacer"></span>'
-            f'<a href="/trash">Trash ({trash_count} painting{plural})</a>'
-        )
+        right += f'<a href="/trash">Trash ({trash_count} painting{plural})</a>'
+    if right:
+        heading += f'<span class="spacer"></span>{right}'
     if flash:
         body = _flash(flash) + body
     return PAGE.format(**_SCHEME, title=title, heading=heading, css=CSS, body=body)
@@ -577,7 +705,7 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
     return PAGE.format(**_SCHEME, title=title, heading=heading, css=CSS, body=body)
 
 
-def render_public(stars: list[Star]) -> str:
+def render_public(stars: list[Star], owner: str = "") -> str:
     """The gallery as a page fit for the open internet: a list of paintings, and
     nothing that acts on them.
 
@@ -590,9 +718,17 @@ def render_public(stars: list[Star]) -> str:
     The empty-state copy is neutral: the desktop page tells you to click the ★ on
     a wallpaper caption, which means nothing to someone who found this on the web.
 
-    It is also the only page that names the tool. A tab, a bookmark and a search
-    result want `PUBLIC_TITLE` rather than a count that changes on every star, and
-    a stranger who likes the collection has nowhere else to find out what built it.
+    It is also the only page that names the tool, and the only one that credits
+    Wikidata and Wikimedia Commons for the paintings themselves. A tab, a bookmark
+    and a search result want `PUBLIC_TITLE` rather than a count that changes on
+    every star, and a stranger who likes the collection has nowhere else to find
+    out what built it or where the art came from.
+
+    `owner` (`Config.owner`) names whose collection this is, in the *heading*
+    only — see `_title()`. `PUBLIC_TITLE` still names the tool in the browser
+    tab, same reasoning as the count: a bookmark wants something that doesn't
+    change, and an owner set after the page was first bookmarked would be a
+    second thing that could.
     """
     if stars:
         body = _grid(
@@ -609,11 +745,14 @@ def render_public(stars: list[Star]) -> str:
     else:
         body = '<p class="empty">No paintings here yet.</p>'
     body += (
-        f'<footer>Starred with <a href="{ARTWALL_URL}" '
-        f'target="_blank" rel="noopener noreferrer">artwall</a></footer>'
+        f'<footer><p>Starred with <a href="{ARTWALL_URL}" '
+        f'target="_blank" rel="noopener noreferrer">artwall</a>.</p>'
+        f'<p>Paintings and their details from <a href="{WIKIDATA_URL}" target="_blank" '
+        f'rel="noopener noreferrer">Wikidata</a> and <a href="{WIKIMEDIA_COMMONS_URL}" '
+        f'target="_blank" rel="noopener noreferrer">Wikimedia Commons</a>.</p></footer>'
     )
     return PAGE.format(
-        **_SCHEME, title=PUBLIC_TITLE, heading=_title(stars), css=CSS, body=body
+        **_SCHEME, title=PUBLIC_TITLE, heading=_title(stars, owner), css=CSS, body=body
     )
 
 
@@ -622,7 +761,7 @@ def write_page(config: Config) -> Path:
     so the backed-up directory opens in any browser, on any machine, offline."""
     page = config.stars_page
     page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(render_page(load(config), public_url=config.public_url))
+    page.write_text(render_page(load(config), public_url=config.public_url, owner=config.owner))
     return page
 
 
@@ -697,7 +836,7 @@ def publish(
         _prune(config.public_image_dir, keys)
         _prune(config.public_thumb_dir, keys)
 
-        config.public_page.write_text(render_public(stars))
+        config.public_page.write_text(render_public(stars, owner=config.owner))
     return config.public_dir
 
 
@@ -754,6 +893,7 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
         if self.path == "/":
             # Reading the flash clears it, so the banner shows once. Only the two
             # pages do this — a thumbnail fetch must not swallow the message.
+            git_sync = is_git_repo(self.config)
             self._html(
                 render_page(
                     load(self.config),
@@ -761,6 +901,9 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
                     flash=self.session.take_flash(),
                     trash_count=len(load_trash(self.config)),
                     public_url=self.config.public_url,
+                    git_sync=git_sync,
+                    sync_pending=sync_pending(self.config) if git_sync else False,
+                    owner=self.config.owner,
                 )
             )
         elif self.path == "/trash":
@@ -790,6 +933,17 @@ class _Gallery(http.server.BaseHTTPRequestHandler):
         return Flash(ADD_VERBS[outcome], record["title"])
 
     def do_POST(self) -> None:
+        if self.path == "/sync":
+            # Its own early return: unlike the routes below, this doesn't change
+            # the collection, so there's nothing for write_page()/publish() to
+            # catch up on.
+            try:
+                sync(self.config)
+                self.session.flash = Flash("Synced")
+            except SyncError as error:
+                self.session.flash = Flash(f"Sync failed — {error}")
+            self._see_other("/")
+            return
         unstar_match = UNSTAR_PATH.match(self.path)
         restore_match = RESTORE_PATH.match(self.path)
         if self.path == "/star":

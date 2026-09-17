@@ -5,6 +5,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -82,6 +83,18 @@ class RenderPage(unittest.TestCase):
         self.assertIn("★ 1 starred painting<", stars.render_page([star_of(101)]))
         self.assertIn("★ 2 starred paintings<", stars.render_page([star_of(101), star_of(102)]))
 
+    def test_an_owner_is_named_beside_the_star(self):
+        page = stars.render_page([star_of(101)], owner="Alex")
+        heading = page.split("<h1>")[1].split("</h1>")[0]
+        self.assertEqual(heading, "★ Alex starred 1 painting")
+
+    def test_an_owner_with_no_stars_drops_the_count_entirely(self):
+        page = stars.render_page([], owner="Alex")
+        self.assertIn("★ Alex starred paintings<", page)
+
+    def test_no_owner_configured_keeps_the_generic_heading(self):
+        self.assertIn("★ 1 starred painting<", stars.render_page([star_of(101)], owner=""))
+
     def test_images_are_relative_so_the_directory_is_portable(self):
         page = stars.render_page([star_of(101)])
         self.assertIn('<img src="images/Q101.jpg"', page)
@@ -127,6 +140,36 @@ class RenderPage(unittest.TestCase):
         self.assertIn('<a href="/trash">Trash (2 paintings)</a>', linked)
         one = stars.render_page(stars_, interactive=True, trash_count=1)
         self.assertIn("Trash (1 painting)</a>", one)
+
+    def test_the_sync_button_appears_only_when_interactive_and_a_git_repo(self):
+        stars_ = [star_of(101)]
+        self.assertNotIn("/sync", stars.render_page(stars_))  # not served
+        self.assertNotIn("/sync", stars.render_page(stars_, interactive=True))  # not a git repo
+        self.assertNotIn(
+            "/sync", stars.render_page(stars_, git_sync=True)
+        )  # a git repo, but archived
+        served = stars.render_page(stars_, interactive=True, git_sync=True)
+        self.assertIn('<form class="sync" method="post" action="/sync">', served)
+
+    def test_the_sync_button_is_disabled_when_nothing_is_pending(self):
+        served = stars.render_page(
+            [star_of(101)], interactive=True, git_sync=True, sync_pending=False
+        )
+        self.assertIn('<button type="submit" disabled>⇪ Sync</button>', served)
+
+    def test_the_sync_button_is_enabled_when_something_is_pending(self):
+        served = stars.render_page(
+            [star_of(101)], interactive=True, git_sync=True, sync_pending=True
+        )
+        self.assertIn('<button type="submit">⇪ Sync</button>', served)
+
+    def test_the_sync_button_and_the_trash_link_share_one_spacer(self):
+        # each is independently optional; the heading must still read right with
+        # both, either alone, or neither
+        page = stars.render_page(
+            [star_of(101)], interactive=True, git_sync=True, trash_count=1
+        )
+        self.assertEqual(page.count('<span class="spacer">'), 1)
 
     def test_the_published_address_is_shown_when_configured(self):
         page = stars.render_page([star_of(101)], public_url="https://art.example.com/")
@@ -398,13 +441,40 @@ class RenderPublic(unittest.TestCase):
         self.assertIn("<title>artwall - stars</title>", page)
         self.assertIn("★ 2 starred paintings<", page)  # the heading still counts
 
+    def test_an_owner_names_the_heading_but_not_the_tab(self):
+        # the tab stays generic even with an owner — same reasoning as the count:
+        # a bookmark wants something that doesn't change
+        page = stars.render_public([star_of(101), star_of(102)], owner="Alex")
+        self.assertIn("<title>artwall - stars</title>", page)
+        self.assertIn("★ Alex starred 2 paintings<", page)
+
     def test_it_credits_the_tool_that_built_it(self):
         page = stars.render_public([star_of(101)])
         self.assertIn(
-            '<footer>Starred with <a href="https://github.com/artemave/artwall" '
-            'target="_blank" rel="noopener noreferrer">artwall</a></footer>',
+            '<footer><p>Starred with <a href="https://github.com/artemave/artwall" '
+            'target="_blank" rel="noopener noreferrer">artwall</a>.</p>',
             page,
         )
+
+    def test_it_credits_wikidata_and_wikimedia_commons(self):
+        # a stranger who found this page has no other way to know where the
+        # paintings and their data actually come from
+        page = stars.render_public([star_of(101)])
+        self.assertIn(
+            '<a href="https://www.wikidata.org/" target="_blank" '
+            'rel="noopener noreferrer">Wikidata</a>',
+            page,
+        )
+        self.assertIn(
+            '<a href="https://commons.wikimedia.org/" target="_blank" '
+            'rel="noopener noreferrer">Wikimedia Commons</a>',
+            page,
+        )
+
+    def test_the_two_credits_are_on_separate_lines(self):
+        page = stars.render_public([star_of(101)])
+        footer = page.split("<footer>")[1].split("</footer>")[0]
+        self.assertEqual(footer.count("<p>"), 2)
 
     def test_the_empty_page_is_credited_too(self):
         self.assertIn("<footer>", stars.render_public([]))
@@ -550,6 +620,129 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.runner.calls, [])
 
 
+class GitSync(unittest.TestCase):
+    """`is_git_repo()` and `sync()` against a real git repo and a real bare
+    remote — no mocks, matching how everything else here is tested."""
+
+    def setUp(self):
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
+        )
+        self.remote = Path(tempfile.mkdtemp()) / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(self.remote)], check=True)
+        subprocess.run(["git", "clone", str(self.remote), str(self.cfg.data_dir)], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.email", "t@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.name", "Test"], check=True
+        )
+
+    def commits(self):
+        log = subprocess.run(
+            ["git", "-C", str(self.remote), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return log.stdout.splitlines()
+
+    def test_is_git_repo_is_false_with_no_git_directory(self):
+        cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()))
+        self.assertFalse(stars.is_git_repo(cfg))
+
+    def test_is_git_repo_is_true_once_cloned(self):
+        self.assertTrue(stars.is_git_repo(self.cfg))
+
+    def test_sync_commits_and_pushes_a_new_file(self):
+        (self.cfg.data_dir / "stars.json").write_text("[]")
+
+        stars.sync(self.cfg)
+
+        self.assertEqual(len(self.commits()), 1)
+
+    def test_sync_with_nothing_changed_pushes_without_committing_again(self):
+        (self.cfg.data_dir / "stars.json").write_text("[]")
+        stars.sync(self.cfg)
+
+        stars.sync(self.cfg)  # nothing changed the second time
+
+        self.assertEqual(len(self.commits()), 1)  # no empty commit
+
+    def test_sync_never_pushes_the_trash(self):
+        # the template ships this .gitignore; sync() relies on the repo already
+        # having it rather than filtering paths itself
+        (self.cfg.data_dir / ".gitignore").write_text(".trash/\n")
+        self.cfg.trash_image("Q999").parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.trash_image("Q999").write_bytes(IMAGE_BYTES)
+
+        stars.sync(self.cfg)
+
+        show = subprocess.run(
+            ["git", "-C", str(self.remote), "show", "--name-only", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertNotIn(".trash", show.stdout)
+
+    def test_sync_without_a_git_repo_raises(self):
+        cfg = Config(cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()))
+        with self.assertRaises(stars.SyncError):
+            stars.sync(cfg)
+
+    def test_sync_raises_with_gits_own_message_when_the_push_fails(self):
+        (self.cfg.data_dir / "stars.json").write_text("[]")
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "remote", "set-url", "origin", "/nope"],
+            check=True,
+        )
+
+        with self.assertRaises(stars.SyncError):
+            stars.sync(self.cfg)
+
+
+class SyncPending(unittest.TestCase):
+    """`sync_pending()` — what disables the ⇪ Sync button."""
+
+    def setUp(self):
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
+        )
+        remote = Path(tempfile.mkdtemp()) / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "clone", str(remote), str(self.cfg.data_dir)], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.email", "t@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.name", "Test"], check=True
+        )
+        # a baseline already on the remote, so "clean" reflects something real
+        (self.cfg.data_dir / "stars.json").write_text("[]")
+        stars.sync(self.cfg)
+
+    def test_false_once_committed_and_pushed(self):
+        self.assertFalse(stars.sync_pending(self.cfg))
+
+    def test_true_with_an_uncommitted_change(self):
+        (self.cfg.data_dir / "stars.json").write_text("[1]")
+        self.assertTrue(stars.sync_pending(self.cfg))
+
+    def test_true_with_an_untracked_file(self):
+        (self.cfg.data_dir / "new.txt").write_text("x")
+        self.assertTrue(stars.sync_pending(self.cfg))
+
+    def test_true_with_a_commit_not_yet_pushed(self):
+        (self.cfg.data_dir / "stars.json").write_text("[1]")
+        subprocess.run(["git", "-C", str(self.cfg.data_dir), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.cfg.data_dir), "commit", "-m", "x"], check=True)
+
+        self.assertTrue(stars.sync_pending(self.cfg))
+
+
 class StartGallery(unittest.TestCase):
     """`start_gallery()` — what the overlay hosts, minus the browser launch."""
 
@@ -662,6 +855,11 @@ class ServeGallery(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('action="/unstar/Q101"', page)
         self.assertIn('action="/unstar/Q102"', page)
+
+    def test_the_heading_uses_the_configured_owner(self):
+        self.cfg.owner = "Alex"
+        _status, body = self.get("/")
+        self.assertIn("★ Alex starred 2 paintings<", body.decode())
 
     def test_serves_the_archived_paintings(self):
         status, body = self.get("/images/Q101.jpg")
@@ -819,6 +1017,94 @@ class ServeGallery(unittest.TestCase):
     def test_an_unknown_post_is_not_found(self):
         status, _location = self.post("/nope")
         self.assertEqual(status, 404)
+
+
+class SyncRoute(unittest.TestCase):
+    """POST /sync — the button a non-tech user clicks instead of a terminal."""
+
+    def setUp(self):
+        self.opener = urllib.request.build_opener(_NoRedirect)
+        self.cfg = Config(
+            cache_dir=Path(tempfile.mkdtemp()), data_dir=Path(tempfile.mkdtemp()) / "artwall"
+        )
+        self.remote = Path(tempfile.mkdtemp()) / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(self.remote)], check=True)
+        subprocess.run(["git", "clone", str(self.remote), str(self.cfg.data_dir)], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.email", "t@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "config", "user.name", "Test"], check=True
+        )
+        self.server = stars.start_gallery(self.cfg, republish=False, runner=Recorder())
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = self.server.url.rstrip("/")
+
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path) as r:
+            return r.status, r.read()
+
+    def post(self, path):
+        request = urllib.request.Request(self.base + path, data=b"", method="POST")
+        try:
+            response = self.opener.open(request)
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("Location")
+        return response.status, response.headers.get("Location")
+
+    def commits(self):
+        log = subprocess.run(
+            ["git", "-C", str(self.remote), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return log.stdout.splitlines()
+
+    def test_the_button_appears_because_the_data_dir_is_a_git_repo(self):
+        _status, body = self.get("/")
+        self.assertIn('action="/sync"', body.decode())
+
+    def test_the_button_starts_enabled(self):
+        # start_gallery() already wrote stars.html, so there's something to send
+        _status, body = self.get("/")
+        self.assertIn('<button type="submit">⇪ Sync</button>', body.decode())
+
+    def test_the_button_disables_once_there_is_nothing_left_to_send(self):
+        self.post("/sync")
+        _status, body = self.get("/")
+        self.assertIn('<button type="submit" disabled>⇪ Sync</button>', body.decode())
+
+    def test_posting_it_commits_and_pushes_and_redirects_home(self):
+        status, location = self.post("/sync")
+        self.assertEqual(status, 303)
+        self.assertEqual(location, "/")
+        self.assertEqual(len(self.commits()), 1)
+
+    def test_it_does_not_republish(self):
+        # the collection didn't change, so there's nothing for publish() to rebuild
+        self.post("/sync")
+        self.assertFalse(self.cfg.public_dir.exists())
+
+    def test_a_flash_confirms_it_synced(self):
+        self.post("/sync")
+        _status, body = self.get("/")
+        self.assertIn("Synced.", body.decode())
+
+    def test_a_push_failure_is_shown_as_a_flash_not_a_crash(self):
+        subprocess.run(
+            ["git", "-C", str(self.cfg.data_dir), "remote", "set-url", "origin", "/nope"],
+            check=True,
+        )
+
+        status, _location = self.post("/sync")
+
+        self.assertEqual(status, 303)  # still redirects; the failure is a flash, not a 500
+        _status, body = self.get("/")
+        self.assertIn("Sync failed", body.decode())
 
 
 class StarFromLink(unittest.TestCase):

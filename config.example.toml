@@ -62,6 +62,11 @@ public_image_width = 1200
 # find it. The published page never shows it — it *is* that address.
 # public_url = "https://paintings.example.com/"
 
+# Whose collection this is. Named beside the ★ in the gallery's heading
+# ("★ Alex starred 12 paintings" instead of "★ 12 starred paintings") — every
+# rendering (served, archived, published) agrees. Unset means the generic one.
+# owner = "Alex"
+
 # Throttle for `--throttle` runs: skip if the last change was fewer than this
 # many seconds ago (default 1800 = 30 min).
 min_interval = 1800

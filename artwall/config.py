@@ -131,6 +131,11 @@ class Config:
     # it only puts a link to the live site in your own gallery, so the address is
     # somewhere you'll find it. Empty means no link is shown.
     public_url: str = ""
+    # Whose collection this is, shown in the gallery's heading ("Alex starred 12
+    # paintings") in place of the generic "★ 12 starred paintings" — every
+    # rendering (served, archived, published) agrees, since they share
+    # `stars._title()`. Empty means the generic heading.
+    owner: str = ""
     min_interval: float = MIN_INTERVAL
 
     @classmethod

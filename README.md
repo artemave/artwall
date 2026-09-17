@@ -92,6 +92,10 @@ to open it full size; click its title to read the Wikipedia article in a new tab
 Each has a **★ in its corner that removes it** from the gallery, and an **Undo**
 appears when you do.
 
+The heading reads "★ 12 starred paintings" by default. Set `owner = "Alex"` in
+the config and it reads "★ Alex starred 12 paintings" instead, on every
+rendering of the gallery — served, archived and published.
+
 That unstar button is why the gallery is a little loopback web server rather than
 a file the button opens — a page loaded from `file://` can't delete anything. It
 binds `127.0.0.1`, serves only your archived paintings, and needs no JavaScript.
@@ -234,6 +238,18 @@ checked. The published page itself never shows it, since it *is* that address.
 
 If you never publish anything, `--no-publish-stars` skips all of it — worth doing,
 since `public/` holds a second copy of every full-size archive.
+
+#### Uploading it: the ⇪ Sync button
+
+If `~/.local/share/artwall` is itself a git repository, the served gallery shows
+a **⇪ Sync** button next to the ★ count. It commits and pushes whatever changed —
+no terminal. It's disabled whenever there's nothing to send.
+
+[`template/`](template/) is a starting point for that repository: a `.gitignore`
+that excludes `.trash/`, and a GitHub Actions workflow that deploys `public/` to
+GitHub Pages on every push. Create a repo from it, clone it to
+`~/.local/share/artwall`, and set Settings → Pages → Source to "GitHub Actions".
+The button does the rest.
 
 ## Configuration
 

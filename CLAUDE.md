@@ -88,6 +88,9 @@ it can be tested without network or `swaymsg`.
   live site in `render_page()` — *both* its renderings, since the served gallery
   and the archived `stars.html` are alike pages where you look at your own
   collection. `render_public()` deliberately omits it: that page is that address.
+  `owner` is likewise cosmetic: it only reaches `stars._title()`, which names it
+  beside the ★ ("★ Alex starred 12 paintings" instead of "★ 12 starred
+  paintings"). All three renderings agree, since all three call `_title()`.
   The field defaults
   are the built-ins; `Config.load(path)` overlays the user's TOML (`config_file()`
   → `$XDG_CONFIG_HOME/artwall/config.toml`), passing keys straight to the
@@ -191,8 +194,8 @@ it can be tested without network or `swaymsg`.
   (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
   + 303 — no JavaScript. `_Gallery` answers exactly `/`, `/trash`,
   `/images/<key>.jpg`, `/trash/images/<key>.jpg`, `POST /unstar/<key>`,
-  `POST /restore/<key>`, `POST /star` and `POST /trash/empty`; everything else
-  404s. `POST /star` is the one route that reads a **request body** (the pasted
+  `POST /restore/<key>`, `POST /star`, `POST /trash/empty` and `POST /sync`;
+  everything else 404s. `POST /star` is the one route that reads a **request body** (the pasted
   link, form-urlencoded) — every other mutation carries its QID in the path. A
   link that won't resolve comes back as a `Flash`, not an error status: it's
   typed input, so a typo must not replace the gallery with a browser error page.
@@ -232,10 +235,40 @@ it can be tested without network or `swaymsg`.
   button shrinks — it rests at 2.75rem (a finger) and only a pointer device gets the
   2rem version. `-webkit-text-size-adjust: 100%` stops iOS inflating the caption of
   every narrow tile past the heading's size.
+  **The heading/flash buttons (★ Add, ⇪ Sync, Undo, Delete forever) are outlines,
+  not filled blocks**, so the paintings stay the only solid thing on the page; they
+  fill in only on hover, gated in the same `@media (hover: hover)` block as the
+  corner button, for the same reason. `--danger` is a `:root` token like `--bg`/
+  `--fg`, with its own dark-mode value — the light-mode red is close to invisible
+  on a near-black background, and reaching for a brighter one instead would make
+  "Delete forever" the one loud thing on an otherwise quiet page.
+  **`is_git_repo()` + `sync()` are `public/`'s upload step**, for someone who
+  won't use a terminal: `is_git_repo()` is just `(data_dir / ".git").exists()` —
+  it detects a repo, never creates or configures one — and turns on the served
+  page's **⇪ Sync** button (`git_sync` on `render_page()`, archived page never
+  gets it, same reasoning as the trash link). `sync()` is `git add -A`, a commit
+  *only* if `git diff --cached --quiet` says something is staged (skips
+  "nothing to commit" failing the whole thing), then an unconditional push — a
+  no-op push still catches an earlier sync's commit that reached this far but
+  not the remote. It relies on the repo already ignoring `.trash/` (shipped by
+  [`template/`](template/), the starting point for `data_dir` as a repo) rather
+  than filtering paths itself; nothing here would stop a `.trash/` that isn't
+  gitignored from being pushed. A push failure comes back as `SyncError`
+  (git's own stderr) and is shown as a `Flash`, same as a bad pasted link — a
+  non-tech user reads the gallery, not a stack trace. `/sync` is its own branch
+  in `do_POST`, returning early rather than falling into the
+  write_page()/`publish()` trailer the other routes share, because syncing
+  doesn't change the collection — there's nothing for either to catch up on.
+  `sync_pending()` is what the button's `disabled` attribute is set from
+  (`sync_pending` on `render_page()`, computed on every `/` request from a
+  dirty `git status --porcelain` *or* a local commit `@{u}..HEAD` doesn't have
+  yet) — an unresolvable `@{u}` (no push has ever reached the remote) counts
+  as pending too, rather than as "0 ahead", since a comparison that can't even
+  be made is not evidence that nothing needs sending.
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + optional caption; `text=None` composes the painting bare, for
   `"interactive"` mode — plus `thumbnail_command`, the published site's web-sized
-  copy) and `swaymsg`.
+  copy), `swaymsg`, and the `git` commands `sync()`/`sync_pending()` run.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
   get_font, throttle, only)` injects `rng`, `runner`, `get_outputs`, and `get_font`
   (defaulting to `random`, `subprocess.run`, `sway_outputs`, and `system_font`)
@@ -372,3 +405,11 @@ its own lifetime, and publishes on another — both on by default, opt out with
 through). There is no standalone gallery command, which is what makes "exactly one
 gallery" structural rather than enforced. The
 trash outlives it: only the gallery's "Delete forever" button removes a painting.
+
+[`template/`](template/) is not Python and ships nothing to `artwall/` — it's the
+starting point for `data_dir` as its own git repo, for someone who wants the ⇪ Sync
+button (`stars.is_git_repo()`/`stars.sync()`) without ever opening a terminal: its
+`.gitignore` keeps `.trash/` off the remote, and its GitHub Actions workflow
+deploys `public/` to GitHub Pages on every push `sync()` makes. Cloning it *is* the
+one-time setup; nothing in `artwall` itself creates the repo or configures a
+remote.
