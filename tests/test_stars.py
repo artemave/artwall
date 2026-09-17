@@ -441,12 +441,10 @@ class RenderPublic(unittest.TestCase):
         self.assertIn("<title>artwall - stars</title>", page)
         self.assertIn("★ 2 starred paintings<", page)  # the heading still counts
 
-    def test_an_owner_names_the_heading_but_not_the_tab(self):
-        # the tab stays generic even with an owner — same reasoning as the count:
-        # a bookmark wants something that doesn't change
+    def test_an_owner_names_the_tab_too_but_still_not_the_count(self):
         page = stars.render_public([star_of(101), star_of(102)], owner="Alex")
-        self.assertIn("<title>artwall - stars</title>", page)
-        self.assertIn("★ Alex starred 2 paintings<", page)
+        self.assertIn("<title>Alex starred paintings - artwall</title>", page)
+        self.assertIn("★ Alex starred 2 paintings<", page)  # the heading still counts
 
     def test_it_credits_the_tool_that_built_it(self):
         page = stars.render_public([star_of(101)])

@@ -595,6 +595,19 @@ def _title(stars: list[Star], owner: str = "") -> str:
     return f"★ {count} starred painting{plural}"
 
 
+def _public_title(owner: str = "") -> str:
+    """The published page's `<title>` — the only rendering with a *different*
+    stable phrase for the tab than `_title()`'s, because this is the one page a
+    stranger might reach by search or bookmark rather than by using the gallery
+    itself, and `PUBLIC_TITLE` alone is how they'd learn what built it. Naming
+    the owner there too doesn't reintroduce the count `_title([], owner)`
+    already keeps out of a tab.
+    """
+    if not owner:
+        return PUBLIC_TITLE
+    return f"{owner} starred paintings - artwall"
+
+
 def render_page(
     stars: list[Star],
     interactive: bool = False,
@@ -722,15 +735,9 @@ def render_public(stars: list[Star], owner: str = "") -> str:
 
     It is also the only page that names the tool, and the only one that credits
     Wikidata and Wikimedia Commons for the paintings themselves. A tab, a bookmark
-    and a search result want `PUBLIC_TITLE` rather than a count that changes on
-    every star, and a stranger who likes the collection has nowhere else to find
-    out what built it or where the art came from.
-
-    `owner` (`Config.owner`) names whose collection this is, in the *heading*
-    only — see `_title()`. `PUBLIC_TITLE` still names the tool in the browser
-    tab, same reasoning as the count: a bookmark wants something that doesn't
-    change, and an owner set after the page was first bookmarked would be a
-    second thing that could.
+    and a search result want a title that doesn't change on every star, and a
+    stranger who likes the collection has nowhere else to find out what built it
+    or where the art came from — see `_public_title()`.
     """
     if stars:
         body = _grid(
@@ -754,7 +761,7 @@ def render_public(stars: list[Star], owner: str = "") -> str:
         f'target="_blank" rel="noopener noreferrer">Wikimedia Commons</a>.</p></footer>'
     )
     return PAGE.format(
-        **_SCHEME, title=PUBLIC_TITLE, heading=_title(stars, owner), css=CSS, body=body
+        **_SCHEME, title=_public_title(owner), heading=_title(stars, owner), css=CSS, body=body
     )
 
 
