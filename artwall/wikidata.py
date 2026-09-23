@@ -361,6 +361,27 @@ def image_url(commons_url: str, filename: str, width: int) -> str:
     return f"{commons_url}{urllib.parse.quote(filename)}?width={width}"
 
 
+def parse_image_size(result: dict[str, Any]) -> tuple[int, int] | None:
+    """An image's native `(width, height)` from a Commons `imageinfo` response, or
+    None if the file has since been deleted or renamed."""
+    page = next(iter(result["query"]["pages"].values()))
+    info = page.get("imageinfo")
+    return (info[0]["width"], info[0]["height"]) if info else None
+
+
+def fits(native_width: int, native_height: int, width: int, height: int) -> bool:
+    """Whether a `native_width`x`native_height` image fills a `width`x`height`
+    canvas, via `commands.compose_command`'s plain (aspect-preserving,
+    letterboxed) `-resize`, without that resize enlarging — and blurring — it.
+
+    That resize's scale factor is `min(width/native_width, height/native_height)`;
+    it exceeds 1 (upscaling) only when *both* ratios do, i.e. only when the image
+    is smaller than the canvas on *both* sides. So matching or exceeding the
+    canvas on just one side is already enough.
+    """
+    return native_width >= width or native_height >= height
+
+
 def _ordinal(n: int) -> str:
     """1 -> "1st", 13 -> "13th", 21 -> "21st"."""
     if 10 <= n % 100 <= 20:  # 11th–13th break the pattern the tens don't

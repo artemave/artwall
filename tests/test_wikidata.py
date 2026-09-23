@@ -193,6 +193,32 @@ class ImageUrl(unittest.TestCase):
         self.assertEqual(url, "https://commons/Special:FilePath/Mona%20Lisa.jpg?width=2560")
 
 
+class ParseImageSize(unittest.TestCase):
+    def test_reads_width_and_height_from_imageinfo(self):
+        result = {"query": {"pages": {"123": {"imageinfo": [{"width": 3000, "height": 2000}]}}}}
+        self.assertEqual(wikidata.parse_image_size(result), (3000, 2000))
+
+    def test_none_for_a_page_with_no_imageinfo(self):
+        # a file the catalogue named that has since been deleted or renamed
+        result = {"query": {"pages": {"-1": {"missing": ""}}}}
+        self.assertIsNone(wikidata.parse_image_size(result))
+
+
+class Fits(unittest.TestCase):
+    def test_native_image_at_least_as_big_as_the_canvas_fits(self):
+        self.assertTrue(wikidata.fits(3000, 2000, 1920, 1080))
+
+    def test_smaller_on_both_sides_does_not_fit(self):
+        self.assertFalse(wikidata.fits(800, 600, 1920, 1080))
+
+    def test_matching_only_one_side_still_fits(self):
+        # a tall portrait scan: narrower than the canvas but far taller than it -
+        # the aspect-preserving resize scales it down by height, never enlarging it
+        self.assertTrue(wikidata.fits(1000, 3000, 1920, 1080))
+        # a wide, short scan: the mirror image of the above
+        self.assertTrue(wikidata.fits(2000, 100, 1920, 1080))
+
+
 class Sitelink(unittest.TestCase):
     def _result(self, sitelinks):
         return {"entities": {"Q42": {"sitelinks": sitelinks}}}

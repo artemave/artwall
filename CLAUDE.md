@@ -117,7 +117,13 @@ it can be tested without network or `swaymsg`.
   `file_page_url` for the Commons description page that becomes its link); build
   the sized Commons image URL from a
   filename
-  (`image_url` → `Special:FilePath/<file>?width=`); pull the Wikipedia article
+  (`image_url` → `Special:FilePath/<file>?width=`); read an image's native pixel
+  size from a Commons `imageinfo` response (`parse_image_size`) and check whether
+  that size can fill a display without `commands.compose_command`'s
+  aspect-preserving `-resize` enlarging — and blurring — it (`fits`: its scale
+  factor is `min` of the two side ratios, so it only exceeds 1, upscaling, when
+  the image is smaller than the display on *both* sides — matching or exceeding
+  it on just one is enough); pull the Wikipedia article
   URL from a `sitelinks/urls` response (`parse_sitelink`) and build the
   always-present Wikidata page URL (`entity_url`, the article fallback). Prefer
   adding source logic here.
@@ -336,7 +342,10 @@ get_outputs`; each is an `Output` carrying name + pixel size + HiDPI scale) and
 the system font (`get_font`, default `system_font()`) → for each display,
 pick a random QID and fetch its image filename + title/date via the Action API
 (`wbgetentities`), then a second `wbgetentities` for the creator's name (retry up
-to `ATTEMPTS` only to skip a QID that has since lost its image), build and
+to `ATTEMPTS`, same as a QID that has since lost its image, to skip one whose
+native resolution — a Commons `imageinfo` call — is smaller than the display on
+*both* sides: `commands.compose_command`'s aspect-preserving `-resize` would
+enlarge, and blur, it; `wikidata.fits()` is the check), build and
 download a width-capped Commons thumbnail, `magick`-compose it onto an
 `Output`-sized gradient canvas (whole painting; caption burned in only in
 `"text"` mode) at `current-<output>.jpg`, `swaymsg output <name> bg … fill` (a

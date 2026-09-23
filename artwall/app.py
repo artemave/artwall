@@ -131,11 +131,29 @@ def _artist(config: Config, creator_qid: str) -> str:
     return wikidata.label(result, creator_qid, config.language)
 
 
+def _image_size(config: Config, filename: str) -> tuple[int, int] | None:
+    """An image's native pixel size (a Commons `imageinfo` call), or None if the
+    file has since been deleted or renamed."""
+    result = web.get_json(
+        config.commons_api_url,
+        {
+            "action": "query",
+            "titles": wikidata.FILE_PREFIX + filename,
+            "prop": "imageinfo",
+            "iiprop": "size",
+            "format": "json",
+        },
+    )
+    return wikidata.parse_image_size(result)
+
+
 def choose(
     config: Config,
     ids: list[int],
     rng: random.Random,
     exclude: list[int],
+    width: int,
+    height: int,
     attempts: int = ATTEMPTS,
 ) -> tuple[int, dict[str, str]]:
     """Pick a random painting (avoiding `exclude`) and fetch its image + caption.
@@ -143,6 +161,9 @@ def choose(
     Per-painting data comes from the Action API, not WDQS, so a query-service
     outage doesn't break runs once the catalogue is cached. `exclude` holds the
     ids already used this run, so several displays each get a different painting.
+    `width`/`height` are the target display's pixel size: a candidate whose
+    native image would be upscaled onto it (`wikidata.fits`) is skipped, same as
+    one whose image has vanished — both just cost a retry.
     """
     candidates = [i for i in ids if i not in exclude]
 
@@ -150,9 +171,13 @@ def choose(
         qid = rng.choice(candidates)
         result = _get_entity(config, f"Q{qid}", "claims|labels")
         painting = wikidata.parse_entity(result, qid, config.language)
-        if painting:
-            painting["artist"] = _artist(config, painting["creator_qid"])
-            return qid, painting
+        if not painting:
+            continue
+        size = _image_size(config, painting["image"])
+        if size is None or not wikidata.fits(*size, width, height):
+            continue
+        painting["artist"] = _artist(config, painting["creator_qid"])
+        return qid, painting
 
     raise RuntimeError("Could not fetch a usable painting from Wikidata")
 
@@ -341,7 +366,7 @@ def _render(
     on any resolution; otherwise the painting is composed bare and a Wikipedia
     link is resolved (interactive-overlay mode).
     """
-    qid, painting = choose(config, ids, rng, exclude)
+    qid, painting = choose(config, ids, rng, exclude, width, height)
     image = wikidata.image_url(config.commons_url, painting["image"], width)
     web.download(image, image_path)
     command = commands.compose_command(

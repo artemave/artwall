@@ -47,6 +47,10 @@ def select_labels(store, params):
     return {}
 
 
+DEFAULT_IMAGE_SIZE = (4000, 3000)  # comfortably bigger than any test display
+LOW_RES_IMAGE_SIZE = (800, 600)  # smaller than a test display on both sides
+
+
 def wikidata_router(
     qids,
     missing=(),
@@ -60,6 +64,7 @@ def wikidata_router(
     depicts_only=(),
     described_files=(),
     described_type="painting",
+    low_res=(),
 ):
     """Serve a tiny Wikidata/Commons: WDQS catalogue CSV, Action-API entities, images.
 
@@ -78,11 +83,15 @@ def wikidata_router(
     `described_files` are `unlinked_files` that still describe their artwork in an
     `{{Artwork}}` wikitext template — the Commons-only fallback. `described_type`
     sets that template's `object type`, so a non-painting can be rejected there too.
+
+    Every image reports `DEFAULT_IMAGE_SIZE` from `imageinfo` — comfortably bigger
+    than any test display — except `low_res` QIDs, which report `LOW_RES_IMAGE_SIZE`
+    (smaller on both sides), so `choose()` skips and re-picks past them.
     """
     missing, anonymous, no_article = set(missing), set(anonymous), set(no_article)
     unknown_files, unlinked_files = set(unknown_files), set(unlinked_files)
     not_paintings, depicts_only = set(not_paintings), set(depicts_only)
-    described_files = set(described_files)
+    described_files, low_res = set(described_files), set(low_res)
 
     def entity(num):
         instance = "Q5" if num in not_paintings else wikidata.PAINTING_QID
@@ -101,14 +110,18 @@ def wikidata_router(
         return ent
 
     def commons(params):
-        """Commons' Action API: file title -> page id, then page id -> P6243."""
+        """Commons' Action API: file title -> page id, then page id -> P6243 / size."""
         if params["action"][0] == "query":
             match = FILE_TITLE.match(params["titles"][0])
             num = int(match[1]) if match else None
             if num is None or num in unknown_files:
                 return {"query": {"pages": {"-1": {"missing": ""}}}}
             pageid = COMMONS_PAGE_OFFSET + num
-            return {"query": {"pages": {str(pageid): {"pageid": pageid}}}}
+            page = {"pageid": pageid}
+            if params.get("prop") == ["imageinfo"]:
+                width, height = LOW_RES_IMAGE_SIZE if num in low_res else DEFAULT_IMAGE_SIZE
+                page["imageinfo"] = [{"width": width, "height": height}]
+            return {"query": {"pages": {str(pageid): page}}}
         if params["action"][0] == "parse":  # the wikitext fallback
             match = FILE_TITLE.match(params["page"][0])
             num = int(match[1])
@@ -274,6 +287,40 @@ class RunTests(unittest.TestCase):
             )
 
         self.assertEqual(shown, [102])  # the vanished 101 was skipped
+
+    def test_retries_past_a_painting_too_small_for_the_display(self):
+        # 102's scan is smaller than the display on both sides (it would be
+        # upscaled, and blurry); only 101 is usable. rng.Random(0) draws 102
+        # first (twice), so this only passes if the skip actually retries.
+        router = wikidata_router([101, 102], low_res={102})
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        self.assertEqual(shown, [101])  # the too-small 102 was skipped
+
+    def test_retries_past_a_painting_whose_file_vanished_from_commons(self):
+        # 102's Wikidata claim still names a file, but Commons itself no longer
+        # has it (deleted/renamed there since); only 101 is usable. rng.Random(0)
+        # draws 102 first (twice), so this only passes if the skip actually retries.
+        router = wikidata_router([101, 102], unknown_files={102})
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=Recorder(),
+                get_outputs=outputs("DP-1"),
+                get_font=fake_font,
+            )
+
+        self.assertEqual(shown, [101])
 
     def test_anonymous_painting_gets_unknown_artist(self):
         router = wikidata_router([101], anonymous={101})
