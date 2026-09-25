@@ -1,10 +1,8 @@
 # artwall
 
 Rotate your [Sway](https://swaywm.org/) or [KDE Plasma](https://kde.org/plasma-desktop/)
-wallpaper through random paintings from
-[Wikidata](https://www.wikidata.org/). The caption (artist, title, date) sits in a
-corner with a clickable link to the painting's Wikipedia page — and a **star**
-button that keeps the ones you like.
+wallpaper through random paintings from [Wikidata](https://www.wikidata.org/),
+with a clickable caption and a gallery of the ones you star.
 
 
 
@@ -12,17 +10,10 @@ https://github.com/user-attachments/assets/2f3c4325-da6f-43f9-b121-dbcc80158574
 
 
 
+## Install
 
-
-## Requirements
-
-- Python 3.11+
-- Sway, or KDE Plasma 6 in a Wayland session
-- PyGObject + gtk-layer-shell (GTK 3) - for the caption
-
-Install the external tools (you already have your desktop and Python). PyGObject and GTK 3
-are usually present on a desktop install - the commands list them anyway, so the
-ones you actually tend to be missing are **ImageMagick** and **gtk-layer-shell**:
+Needs Python 3.11+, Sway or KDE Plasma 6 (Wayland), ImageMagick, PyGObject and
+gtk-layer-shell:
 
 ```bash
 sudo dnf install ImageMagick gtk-layer-shell python3-gobject       # Fedora
@@ -30,34 +21,15 @@ sudo apt install imagemagick gir1.2-gtklayershell-0.1 python3-gi   # Debian/Ubun
 sudo pacman -S imagemagick gtk-layer-shell python-gobject          # Arch
 ```
 
-## Usage
+Clone the repo and start `bin/artwall` with your session. Nothing to install.
 
-Run it from this checkout - there's nothing to install. It detects which desktop
-it's running under (Sway via `SWAYSOCK`, Plasma via `XDG_CURRENT_DESKTOP`).
-
-Start `bin/artwall` with your session. It sets a painting at login, changes it
-every `Config.min_interval` (30 min by default), re-rolls when a monitor is
-plugged in so the new screen gets one too, and shows each display's
-[caption](#the-caption).
-
-> artwall also hosts your [gallery](#starring-paintings) and keeps the
-> [published copy](#publishing-the-gallery) in step, both on by default. Opt out
-> with `--no-serve-stars` / `--no-publish-stars`.
-
-### Sway
-
-Add to your Sway config (`~/.config/sway/config`), pointing at where you cloned it:
+**Sway** — in `~/.config/sway/config`:
 
 ```
 exec_always /path/to/artwall/bin/artwall
 ```
 
-`exec_always` restarts it on `swaymsg reload`; a new artwall replaces the old one.
-
-### KDE Plasma
-
-Add an autostart entry, `~/.config/autostart/artwall.desktop`, pointing at where
-you cloned it:
+**KDE Plasma** — `~/.config/autostart/artwall.desktop`:
 
 ```ini
 [Desktop Entry]
@@ -66,180 +38,40 @@ Name=artwall
 Exec=/path/to/artwall/bin/artwall
 ```
 
-### By hand
+## Features
 
-To drive it by hand, from the checkout:
+- **Rotation** — a new painting at login, every 30 minutes (`min_interval`), and
+  when a monitor is plugged in. Each display gets its own, shown whole on a
+  background blended from its colours.
+- **Caption** — artist, title and date in a corner of each display. Click it for
+  the Wikipedia article; **↻** re-rolls that display; **★** stars the painting;
+  the grid button opens the gallery.
+- **Gallery** — every starred painting, archived locally in
+  `~/.local/share/artwall/`. Unstarring moves a painting to the trash, where you
+  can restore it or delete it for good.
+- **Add your own** — paste a Wikipedia or Commons image link into the gallery to
+  add any painting you come across.
+- **Publishing** — `~/.local/share/artwall/public/` is a static copy of the
+  gallery, ready to upload anywhere. If `~/.local/share/artwall` is a git repo, a
+  **⇪ Sync** button commits and pushes it; [`template/`](template/) sets that up
+  to deploy to GitHub Pages.
+
+Opt out of the gallery server or the published copy with `--no-serve-stars` /
+`--no-publish-stars`.
+
+## Commands
 
 ```bash
-./bin/artwall --once       # set a new wallpaper once, and exit
-./bin/artwall --preview    # open a random painting without changing the wallpaper
-./bin/artwall --find monet # look up Wikidata QIDs for the config (see below)
+bin/artwall                 # run for the session (see Install)
+bin/artwall --once          # set a new wallpaper and exit
+bin/artwall --preview       # open a random painting without changing the wallpaper
+bin/artwall --find monet    # look up Wikidata QIDs for the config
 ```
-
-State lives under `~/.cache/artwall/`; deleting it is a safe full reset. Your
-[starred paintings](#starring-paintings) are the one thing kept outside it, in
-`~/.local/share/artwall/`.
-
-## Starring paintings
-
-Click a caption's **★** to add the painting to your gallery; the **gallery
-button** next to it opens the gallery in your browser.
-
-The gallery shows every painting you've kept, newest first. Click one to see it
-full size, or its title for the Wikipedia article. The ★ in its corner removes
-it (with an **Undo**).
-
-Set `owner = "Alex"` in the config to title it "★ Alex starred 12 paintings".
-With `--no-serve-stars` the button opens a read-only copy instead.
-
-### Adding a painting you found yourself
-
-The wallpaper only ever offers you one painting at a time, but reading about an
-artist usually turns up others. The gallery has a **paste box** for those: open
-the painting's image on Wikipedia, copy the link, paste it in, and it's hung
-alongside the rest.
-
-Both link shapes work — the one you get from clicking an image in an article:
-
-```
-https://en.wikipedia.org/wiki/Muqi#/media/File:Mu-ch'i_001.jpg
-```
-
-and the file page itself, on Wikipedia or Commons:
-
-```
-https://en.wikipedia.org/wiki/File:Bertholet_Fl%C3%A9mal_-_Heliodorus_Driven_from_the_Temple.jpg
-```
-
-The link identifies an *image*, so artwall asks Wikimedia Commons which artwork
-that scan reproduces, and takes the artist, title and date from Wikidata — the
-same place the wallpaper's caption comes from. A pasted painting is therefore
-indistinguishable from one you starred off the wallpaper: same record, same
-archived image, same trash.
-
-Pasting a painting that's already hung says so and changes nothing (it's an
-*add* box, not a toggle); pasting one that's in the trash restores it.
-
-A link can be turned down for four reasons, each said plainly on the page:
-
-| | |
-|---|---|
-| the link names no image | you copied the article link, not the image's |
-| not on Wikimedia Commons | in-copyright art is hosted on Wikipedia itself, and can't be archived |
-| not linked to a painting on Wikidata | a scan nobody has connected to its artwork yet |
-| linked to something that isn't a painting | e.g. a photo of the artist, or a motif rather than a specific work |
-
-That last check is deliberate: artwall collects paintings (`instance of:
-painting`), so prints, drawings and photographs are declined even when the link
-resolves perfectly.
-
-### The trash
-
-**Unstarring never deletes anything.** The painting moves to the trash, keeping
-the position it held. The Undo offer is a flash — it appears once, right after
-the removal, and a reload clears it — but the painting stays recoverable long
-after that: the gallery header links to **Trash (n paintings)**, where each one
-has a Restore button that puts it back exactly where it was, original bytes and
-all.
-
-The trash survives reboots. The only irreversible act in artwall is the
-**Delete n paintings forever** button on the trash page.
-
-> The caption's ★ works differently: it's a toggle, not a delete. Clicking it a
-> second time unstars the painting outright (clicking again re-downloads it).
-> Only the gallery's ★ uses the trash.
-
-Everything lives together in `~/.local/share/artwall/`:
-
-```
-~/.local/share/artwall/
-├── stars.json        the list: artist, title, date, link
-├── stars.html        the gallery, button-less, for browsing a backup
-├── images/
-│   ├── Q20192051.jpg the paintings themselves, archived at 2560px
-│   └── …
-├── public/           the publishable static site (--publish-stars)
-└── .trash/           unstarred paintings, restorable until you empty it
-    ├── trash.json    each one's record and the place it held
-    └── Q17324036.jpg
-```
-
-Note that `.trash/` is backed up along with everything else, and full-size
-paintings are several megabytes each. Empty it when you're sure.
-
-Starring **downloads the painting** (not just a link to it) and the gallery
-references those files by *relative* path, so the directory is self-contained:
-back it up, sync it, or copy it to another machine, and `stars.html` still opens
-in any browser — offline, with the images intact. It sits outside `~/.cache/`
-precisely so that wiping the cache can't take your collection with it.
-
-That archived `stars.html` is rewritten when artwall starts and on every
-unstar, restore or delete. It's the same gallery *without* the buttons or the
-trash link, since a page opened from `file://` has no server to post them to.
-
-Set `stars_image_width` in the config to archive at a different size (default
-`2560`; Commons originals can run past 100 MB, which is why it's capped).
-
-### Publishing the gallery
-
-`stars.html` is for *you* — it lives next to `stars.json` and `.trash/`, so you
-can't upload the directory without publishing the record of every painting you
-ever removed. So artwall maintains a separate copy that you *can* upload:
-
-```
-~/.local/share/artwall/public/
-├── index.html        the gallery, read-only: a list, nothing that acts on it
-├── thumbs/           web-sized copies — what the page actually loads
-│   └── Q20192051.jpg
-└── images/           the full-size archives each painting links to
-    └── Q20192051.jpg
-```
-
-That's a self-contained static site — no server side, no JavaScript, every path
-relative, so it works from a bare static host, a GitHub Pages repo, or a
-subdirectory of one. Copy the directory up and you're done.
-
-The split matters on a phone: a page of 2560px museum scans is tens of megabytes,
-so the grid loads the thumbnails (`public_image_width`, default `1200` — enough
-for a phone's single column at 3x) and only a tap pulls the full scan. The page
-itself is responsive, dark-mode aware and has no hover-only affordances.
-
-It's rebuilt when artwall starts and after **every** way a painting can enter
-or leave the collection — starring one from a caption, and unstarring, restoring
-or pasting one in the gallery. Only what changed is rebuilt, and a painting you
-unstarred is *removed* from the site, since otherwise its image would go on being
-served at its own URL long after it stopped appearing on the page.
-
-Two threads can want to publish at once (a gallery request and a star), so builds
-are serialised; one would otherwise delete a painting the other had just written.
-
-Set `public_url` in the config to wherever you upload it and your own gallery —
-both the served page and the archived `stars.html` — gets a link to the live site
-beside the heading, so the address is somewhere you'll find it. It's purely a note
-to yourself: nothing here uploads anything, and the value is never fetched or
-checked. The published page itself never shows it, since it *is* that address.
-
-If you never publish anything, `--no-publish-stars` skips all of it — worth doing,
-since `public/` holds a second copy of every full-size archive.
-
-#### Uploading it: the ⇪ Sync button
-
-If `~/.local/share/artwall` is itself a git repository, the served gallery shows
-a **⇪ Sync** button next to the ★ count. It commits and pushes whatever changed —
-no terminal. It's disabled whenever there's nothing to send.
-
-[`template/`](template/) is a starting point for that repository: a `.gitignore`
-that excludes `.trash/`, and a GitHub Actions workflow that deploys `public/` to
-GitHub Pages on every push. Create a repo from it, clone it to
-`~/.local/share/artwall`, and set Settings → Pages → Source to "GitHub Actions".
-The button does the rest.
 
 ## Configuration
 
-Out of the box it draws from a curated set of clean-scan museums (see
-[Default collections](#default-collections)). To change that, drop a TOML file at
-`~/.config/artwall/config.toml` (honours `$XDG_CONFIG_HOME`). Every key is optional
-and overrides the built-in default:
+Every key in `~/.config/artwall/config.toml` is optional
+(see [`config.example.toml`](config.example.toml)):
 
 ```toml
 date_begin = 1850          # inception-year window (negative = BC)
@@ -247,121 +79,33 @@ date_end = 1900
 movements = ["Q40415"]     # Impressionism
 genres = ["Q191163"]       # landscape art
 artists = ["Q296"]         # Claude Monet
-collections = ["Q190804"]  # override the default set (or [] for all ~400k paintings)
-language = "en"            # caption / label language
-font_size = 11             # caption point size; omit to use the desktop's UI font size
-caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
-caption_pad_x = 24         # caption inset from the side edge, in pixels
-caption_pad_y = 64         # caption inset from the top/bottom edge (or panel), in pixels
-stars_image_width = 2560   # width to archive a starred painting at
-min_interval = 1800        # how often the painting changes, in seconds
+collections = ["Q190804"]  # museums; [] for all ~400k paintings
+language = "en"            # caption language
+font_size = 11             # caption size; default is the desktop's UI font size
+caption_corner = "bottom-right"
+caption_pad_x = 24         # caption inset, in pixels
+caption_pad_y = 64
+min_interval = 1800        # seconds between paintings
+owner = "Alex"             # gallery heading: "★ Alex starred 12 paintings"
+public_url = "https://…"   # link to your published gallery
 ```
 
-Within a knob the values are OR'd (`Monet or Van Gogh`); across knobs they're
-AND'd (Impressionist *and* a landscape). Copy
-[`config.example.toml`](config.example.toml) as a starting point. Changing a filter transparently
-refetches the catalogue (it's cached per filter-set).
-
-> **Heads-up on the catalogue fetch.** The catalogue comes from the Wikidata
-> Query Service (WDQS), which **rate-limits aggressively**. So the *first* run after you change a filter can fail or hang for a bit -
-> especially if you're iterating on filters quickly (each change is a fresh
-> query). This is transient: just run it again in a minute. Once a filter-set's
-> catalogue is cached it isn't queried again for ~30 days, and every per-painting
-> fetch goes to the stable Action API - so day-to-day rotation never touches WDQS.
-
-### Default collections
-
-By default artwall draws from a curated set of large, open-access museums chosen
-for **clean, frameless scans** - so the wallpaper is the artwork itself, not a
-photo of a framed painting on a gallery wall: the Rijksmuseum, Nationalmuseum
-(Sweden), SMK (Denmark), National Gallery of Art (Washington), Art Institute of
-Chicago, the Getty, the Cleveland Museum of Art, and the Museum of Fine Arts,
-Boston.
-
-To draw from **all ~400k paintings** instead (more variety, but you'll get the
-occasional framed-on-the-wall photo), set `collections = []`. To use *different*
-museums, list their QIDs (find them with `--find`).
-
-The catalogue for the default set ships **pre-fetched** with artwall, so the very
-first run works without touching WDQS at all - handy since it's often rate-limited
-right when you log in. (If you change `collections`, that new set is fetched on
-first use, per the note above.) Maintainers regenerate the shipped catalogue with
-`make catalogue` when the default set changes.
-
-### The caption
-
-Each display's caption is a small widget that shows the painting as a clickable link to the painting's Wikipedia
-article (falling back to its Wikidata page), followed by a **★ button** that adds
-the painting to your [gallery](#starring-paintings), a **gallery button** that
-opens the whole collection, and a **refresh button** that re-rolls the wallpaper
-on just that display. Nothing is drawn into the wallpaper itself. Because it's a
-Wayland layer-shell surface sitting *just above the wallpaper*, it's visible and
-clickable wherever the desktop is exposed. It updates automatically on each
-rotation.
-
-### Choosing filters
-
-The four filters reference Wikidata items by QID. Browse the options on
-Wikipedia, then turn the name you picked into a QID with `--find`:
-
-- **movements** - [list of art movements](https://en.wikipedia.org/wiki/List_of_art_movements)
-  (e.g. [Impressionism](https://en.wikipedia.org/wiki/Impressionism) = `Q40415`)
-- **genres** - open-ended, with no single list page; common ones are
-  [portrait](https://en.wikipedia.org/wiki/Portrait_painting),
-  [landscape](https://en.wikipedia.org/wiki/Landscape_painting) (`Q191163`),
-  [still life](https://en.wikipedia.org/wiki/Still_life) (`Q170571`),
-  [history painting](https://en.wikipedia.org/wiki/History_painting),
-  [genre scenes](https://en.wikipedia.org/wiki/Genre_art), marine, nude,
-  vanitas, … - `--find` any genre name
-- **artists** - any painter ([list of painters](https://en.wikipedia.org/wiki/List_of_painters_by_name),
-  e.g. [Claude Monet](https://en.wikipedia.org/wiki/Claude_Monet) = `Q296`)
-- **collections** - any museum ([list of art museums](https://en.wikipedia.org/wiki/List_of_art_museums))
-
-Wikipedia pages don't show QIDs, so once you've picked a name, look it up without
-leaving the terminal:
+Values within a filter are OR'd, filters are AND'd. The default `collections` is
+a set of museums with clean, frameless scans. Find QIDs with `--find`:
 
 ```console
-$ ./bin/artwall --find impressionism
+$ bin/artwall --find impressionism
 Q40415   Impressionism - 19th-century art movement
-Q1475680 impressionism - movement in literature
-...
 ```
 
-Copy the matching QID into the config. (A QID is also the last part of a
-[wikidata.org](https://www.wikidata.org/) item URL, reachable from any Wikipedia
-article via **Tools → Wikidata item**.)
+The first run after changing a filter queries the Wikidata Query Service, which
+is often rate-limited — if it fails, try again in a minute.
 
 ## Development
 
-Run it with `./bin/artwall` (see [Usage](#usage)); there's nothing to install.
-
-Tests use the standard-library `unittest` runner - no mocks:
-
 ```bash
-python3 -m unittest discover -s tests        # everything
-python3 -m unittest tests.test_selection     # one module
-python3 -m unittest tests.test_app.RunTests.test_happy_path_sets_wallpaper
+make install-dev   # ruff, mypy, coverage, GTK stubs
+make check         # lint + typecheck + tests (100% coverage gate)
 ```
 
-Install the dev tooling, then run every check (lint, typecheck, coverage gate)
-with one command:
-
-```bash
-make install-dev   # pip install -r requirements-dev.txt
-make check         # ruff + mypy + tests under the 100% coverage gate
-```
-
-Individual targets are also available: `make lint`, `make typecheck`,
-`make test`, `make coverage`.
-
-Coverage is kept at 100% on everything except the entry-point shim, enforced by
-`fail_under` in `.coveragerc`. The package is fully type-annotated and checked
-under mypy `strict`.
-
-Logic is split out of the entry point so it stays testable: pure builders in
-`wikidata.py` (SPARQL queries + result parsing), `selection.py` and
-`commands.py`, the HTTP client in `web.py`, orchestration in `app.py`. Tests
-exercise the HTTP layer against a real loopback `http.server` (a fake Wikidata),
-and drive `run()` with a seeded `random.Random` and a recording runner that
-captures the wallpaper argv instead of launching it. See `CLAUDE.md` for the
-full module breakdown.
+See [`CLAUDE.md`](CLAUDE.md) for the architecture.
