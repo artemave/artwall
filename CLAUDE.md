@@ -9,9 +9,8 @@ A standard-library-only Python tool that sets a random painting from
 image — ~400k) as the **Sway** or **KDE Plasma** (Wayland) desktop wallpaper. The painting is composed (via
 ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); the
 letterbox margins are filled with a soft gradient sampled from the painting's own
-colours. The caption (artist/title/date) is never drawn into the wallpaper: an
-overlay (a separate `artwall.overlay` process — see below) shows it with a
-clickable Wikipedia link, a ★ button that adds the painting to a **starred
+colours. The caption (artist/title/date) is never drawn into the wallpaper: the daemon
+(what bare `artwall` runs — see below) shows it with a clickable Wikipedia link, a ★ button that adds the painting to a **starred
 gallery**, and a refresh button that re-rolls that one display. The default
 `collections` is a curated set of clean-scan, open-access museums
 (`DEFAULT_COLLECTIONS` — Rijksmuseum, Cleveland, …) so the wallpaper is the
@@ -20,19 +19,19 @@ artwork, not a framed-on-the-wall photo; its catalogue **ships pre-fetched**
 the rate-limited WDQS. `collections = []` draws from *all* ~400k paintings. A TOML
 file at `~/.config/artwall/config.toml` narrows it via a date window + QID filters
 (`movements`/`genres`/`artists`/`collections`) and sets
-`language`/`font_size`. It's a **oneshot** — sets the
-wallpaper once and exits. Rotation is driven by the overlay, which is the one
-process launched with the session: it runs `artwall --throttle` at startup and
-every minute (`--throttle` turns all but one run per `Config.min_interval` into a
-no-op), and `--throttle --min-interval 5` on monitor hotplug. Its children
-inherit the session's environment (`SWAYSOCK` on Sway) — no systemd, no env
-import. The overlay draws the caption in GTK's UI
+`language`/`font_size`. Bare `artwall` is the **daemon**, launched with the
+session; everything else is a **oneshot** — `--once` sets the wallpaper once and
+exits. The daemon drives rotation: it runs `artwall --once --throttle` at
+startup and every minute (`--throttle` turns all but one run per
+`Config.min_interval` into a no-op), and `--once --throttle --min-interval 5` on
+monitor hotplug. Its children inherit the session's environment (`SWAYSOCK` on
+Sway) — no systemd, no env import. The daemon draws the caption in GTK's UI
 font; `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
 tools (`swaymsg`, `kscreen-doctor`, `gdbus`, `magick`) are fine since we already
-shell out. The one exception is `artwall/overlay.py` (the caption widget),
-which needs PyGObject + gtk-layer-shell — it's the lone GUI/daemon component and
-is quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs).
+shell out. The one exception is `artwall/daemon.py`, which needs PyGObject +
+gtk-layer-shell — it's the lone GUI/daemon component, imported by `__main__` only
+when no one-shot action was asked for, and quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs).
 
 ## Commands
 
@@ -44,15 +43,15 @@ make install-dev                        # dev tooling: ruff, mypy, coverage, GTK
 make catalogue                          # regenerate the shipped first-run catalogue (hits WDQS)
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
-python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
-python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (the overlay's timer)
-python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (the overlay's hotplug re-roll)
+python3 -m artwall                       # the daemon: captions + rotation (needs PyGObject + gtk-layer-shell). Also
+                                         # hosts the starred gallery and maintains data_dir/public/ — both on by
+                                         # default; opt out with --no-serve-stars / --no-publish-stars
+python3 -m artwall --once                # set the wallpaper once (hits network + swaymsg + magick)
+python3 -m artwall --once --throttle     # set once, but no-op if changed < Config.min_interval ago (the daemon's timer)
+python3 -m artwall --once --throttle --min-interval 5  # throttle with a 5s window (the daemon's hotplug re-roll)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
-python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
-python3 -m artwall --star DP-1            # star/unstar that display's painting (the overlay's ★ button)
-python3 -m artwall.overlay               # the caption overlay (needs PyGObject + gtk-layer-shell). Also hosts the
-                                         # starred gallery and maintains data_dir/public/ — both on by default;
-                                         # opt out with --no-serve-stars / --no-publish-stars
+python3 -m artwall --output DP-1          # re-roll only one display (the caption's refresh button)
+python3 -m artwall --star DP-1            # star/unstar that display's painting (the caption's ★ button)
 ```
 
 ## Architecture
@@ -69,7 +68,7 @@ it can be tested without network or `swaymsg`.
   `min_interval`.
   `collections` defaults to `DEFAULT_COLLECTIONS` (curated clean-scan museums).
   `caption_file(name)` is where `run()` writes a display's painting record for the
-  overlay (`caption-<name>.json`). **Two roots on purpose:** `cache_dir`
+  daemon (`caption-<name>.json`). **Two roots on purpose:** `cache_dir`
   (`~/.cache/artwall`) is disposable — deleting it is a documented safe reset — so
   the stars live under `data_dir` (`~/.local/share/artwall`) instead:
   `stars_file` (`stars.json`), `star_image(key)` (`images/<key>.jpg`) and the
@@ -167,7 +166,7 @@ it can be tested without network or `swaymsg`.
   wrong one.
 - `artwall/selection.py` — **pure** `caption` formatting (artist/title/date) and
   `record()`, the painting dict `run()` writes as `caption-<name>.json` and the
-  overlay copies verbatim into the star list (key/artist/title/date/image/url —
+  daemon copies verbatim into the star list (key/artist/title/date/image/url —
   everything needed to caption, link and archive a painting without a refetch).
   **`key` is the painting's identity and it is namespaced**, because paintings
   arrive from two places: `Q<n>` for a Wikidata item (every wallpaper, and any
@@ -183,7 +182,7 @@ it can be tested without network or `swaymsg`.
   downloads the painting into `star_image(key)` — writing the archive *before*
   saving the list, so a failed download never leaves a star pointing at a missing
   image. `write_page()` writes the archived `stars.html`; `start_gallery()` binds the
-  server the overlay hosts.
+  server the daemon hosts.
   `star_link(config, link)` is the gallery's paste box: it hands the URL to
   `app.resolve_link()` and archives the result. Deliberately **not** a toggle —
   you paste to *add*, so a link you've already hung reports `"already"` and
@@ -191,7 +190,7 @@ it can be tested without network or `swaymsg`.
   trash is `restore()`d (`"restored"`) instead of re-downloaded: adding it afresh
   would leave the trash holding the same QID, and restoring *that* later would
   hang a second copy of the same painting.
-  **Why a server:** the overlay's ★ can only unstar the painting *currently* on a
+  **Why a server:** the caption's ★ can only unstar the painting *currently* on a
   display, so the gallery must be able to remove an older one — and a `file://`
   page cannot delete a file. So the gallery renders over a loopback `http.server`
   (`GalleryServer`, bound to port 0) and takes every mutation as a plain form POST
@@ -202,9 +201,9 @@ it can be tested without network or `swaymsg`.
   link, form-urlencoded) — every other mutation carries its QID in the path. A
   link that won't resolve comes back as a `Flash`, not an error status: it's
   typed input, so a typo must not replace the gallery with a browser error page.
-  **`start_gallery()` is the only way a gallery starts**, and the overlay is its
+  **`start_gallery()` is the only way a gallery starts**, and the daemon is its
   only caller — it hosts one on a background thread for its whole lifetime.
-  `republish=True` (the default; the overlay's `--publish-stars`) rebuilds the
+  `republish=True` (the default; the daemon's `--publish-stars`) rebuilds the
   published site after every mutation, and once at startup so the first thing
   served isn't a page left over from a collection that has since changed. The
   `runner` is threaded through to `_Gallery` for it — publishing shells out to
@@ -214,11 +213,11 @@ it can be tested without network or `swaymsg`.
   to be, because a standalone `artwall --stars` could be run twice and leave two
   servers answering two ports; `stop_previous()`/`is_gallery()`/`_cmdline()`/
   `config.stars_pid` all existed for that and are gone. One gallery is now
-  *structural*: only the overlay serves one, and `supersede_running_instances()`
-  already guarantees a single overlay. This is the shape to keep — a state made
+  *structural*: only the daemon serves one, and `supersede_running_instances()`
+  already guarantees a single daemon. This is the shape to keep — a state made
   unreachable beats a mechanism that detects it.
   **`render_public(stars)` + `publish()` are the third rendering — the one for the
-  open internet** (maintained by the overlay's `--publish-stars`, on by default).
+  open internet** (maintained by the daemon's `--publish-stars`, on by default).
   What makes it public isn't the missing buttons
   (`stars.html` has none either), it's *where* and *what*: a self-contained
   `public/` holding only `index.html` + `thumbs/` + `images/`, so what you upload
@@ -276,7 +275,7 @@ it can be tested without network or `swaymsg`.
   `sync()`/`sync_pending()` run.
 - `artwall/desktop.py` — everything compositor-specific, behind one `Desktop`
   NamedTuple: `outputs()` (each an `Output` carrying name + pixel size + HiDPI
-  scale + logical position, which is how the overlay finds its GTK monitor) and
+  scale + logical position, which is how the daemon finds its GTK monitor) and
   `wallpaper(name, path)` (the argv that sets one display's wallpaper). Two
   instances: `SWAY` (`swaymsg`) and `PLASMA` (`kscreen-doctor -j`, and a desktop
   script over D-Bus); `detect(environ)` picks one from `SWAYSOCK` /
@@ -289,9 +288,9 @@ it can be tested without network or `swaymsg`.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, desktop, throttle,
   only)` injects `rng`, `runner` and `desktop` (defaulting to `random`,
   `subprocess.run` and `desktop.detect(os.environ)`) so the full flow can be driven deterministically; `only` restricts the run to a
-  single named output (the overlay's refresh button → `--output`). `search_entities()`
+  single named output (the caption's refresh button → `--output`). `search_entities()`
   backs `--find`. For each display it resolves the Wikipedia URL (`_wiki_url`)
-  and writes `caption_file(name)` for the overlay.
+  and writes `caption_file(name)` for the daemon.
   `resolve_link(config, link)` backs the gallery's paste box: a pasted Wikipedia
   image URL → Commons file → the artwork's QID → the **same** `selection.record()`
   the wallpaper writes. That equivalence is the whole point — a pasted painting is
@@ -303,9 +302,11 @@ it can be tested without network or `swaymsg`.
   *that*). Every rejection raises `LinkError`, whose message is written to be read
   by whoever pasted the link, so the gallery can show it verbatim instead of
   mapping exception types to prose.
-- `artwall/overlay.py` — the caption: a persistent
-  GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched with the
-  session) showing one `BOTTOM`-layer clickable caption per display — each
+- `artwall/daemon.py` — what bare `python3 -m artwall` runs, launched with the
+  session. It sets its process name to `artwall` (`prctl`, so `/proc/<pid>/comm`),
+  because its command line is identical to its one-shot children's; that name is
+  how `supersede_running_instances()` finds an older daemon to replace. It shows
+  a persistent GTK3 + gtk-layer-shell widget per display — one `BOTTOM`-layer clickable caption per display — each
   followed by a ★ button (`--star <name>`), a gallery button (`xdg-open` on
   `gallery_url()`) and a refresh button that re-rolls that
   display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
@@ -313,9 +314,9 @@ it can be tested without network or `swaymsg`.
   on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Every
   child goes through `artwall()`, which `Popen`s `python3 -m artwall …` and reaps
   it from a `GLib.timeout`.
-  **It's the daemon, so it drives rotation.** `main()` runs `artwall --throttle`
+  **It drives rotation.** `main()` runs `artwall --once --throttle`
   once at startup and every `ROTATION_CHECK_SECONDS` (60) after, and
-  `--throttle --min-interval 5` on `monitor-added` — a hotplug re-rolls every
+  `--once --throttle --min-interval 5` on `monitor-added` — a hotplug re-rolls every
   display, which is what gives the new screen a painting, and the short interval
   folds a dock's several monitors into one run. The throttle stays in tested
   `run()` rather than here, since this module isn't covered. Both buttons go
@@ -329,7 +330,7 @@ it can be tested without network or `swaymsg`.
   `file://` URI (and `main()` writes it first, so the button is never dead).
   `--publish-stars` covers **both** mutation paths, which is the whole reason it
   belongs here rather than on a oneshot: the gallery's own buttons republish
-  in-process (`_Gallery.republish`), and the overlay's ★ republishes via
+  in-process (`_Gallery.republish`), and the caption's ★ republishes via
   `_publish_async()` in `_after_star`. Both flags are `BooleanOptionalAction`
   defaulting to `True` — they are what the daemon is *for*, so they exist to be
   negated. **`_publish_async` is a thread, not a child process.** It used to spawn
@@ -363,7 +364,7 @@ download a width-capped Commons thumbnail, `magick`-compose it onto an
 `Output`-sized gradient canvas (the whole painting) at `current-<output>.jpg`,
 set it with `desktop.wallpaper()` (on Sway `swaymsg output <name> bg … fill`, a
 1:1 blit since the canvas is already the display's size), and write
-`caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
+`caption-<output>.json` (text + Wikipedia URL) for the daemon → touch
 `config.stamp`. Selection is plain random — no persisted history — but QIDs
 already chosen this run are excluded so each display gets a *different* painting.
 The pick/download/compose step is `_render()` (takes the target width/height),
@@ -374,13 +375,13 @@ wallpaper untouched.
 `desktop.py`'s live readers (`sway_outputs()`, `plasma_outputs()`) are the
 functions excluded from coverage (`# pragma: no cover`) — they need a live
 compositor; their pure parsing is split out and tested (`parse_outputs()`,
-`parse_kscreen_outputs()`, and the overlay's `parse_font_name()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
+`parse_kscreen_outputs()`, and the daemon's `parse_font_name()`). `artwall/daemon.py` is excluded wholesale (`.coveragerc`
 omit) — it can't run headless. All state is cached under `~/.cache/artwall/`;
 deleting it is a safe reset. The one exception is the starred gallery under
 `~/.local/share/artwall/` (`stars.json` + `images/` + `stars.html` + `.trash/`) —
 durable, self-contained and meant to be backed up, which is exactly why it isn't cache.
 Its `public/` subdirectory is the odd one out: durable in location but entirely
-derived, so deleting it costs nothing but the overlay's next publish.
+derived, so deleting it costs nothing but the daemon's next publish.
 
 ## Testing conventions
 
@@ -396,27 +397,25 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 ## Deployment notes
 
-No installer and no systemd. The user launches one thing with the session,
-`bin/artwall-overlay`: an `exec_always` line in the Sway config, or a
-`~/.config/autostart/*.desktop` entry on Plasma (README has both). The overlay
-does the rest — it rebuilds its surfaces on monitor hotplug via `Gdk.Display`
+No installer and no systemd. The user launches `bin/artwall` with the session:
+an `exec_always` line in the Sway config, or a `~/.config/autostart/*.desktop`
+entry on Plasma (README has both). The daemon does the rest — it rebuilds its surfaces on monitor hotplug via `Gdk.Display`
 `monitor-added`/`monitor-removed`, and runs every `python3 -m artwall …` child
 (rotation, hotplug, refresh, star); the children inherit the launcher's
 `PYTHONPATH`, so a bare `python3 -m artwall` resolves the package. `bin/artwall`
-and `bin/artwall-overlay` are small shell launchers that set `PYTHONPATH` to the
-repo and exec `python3 -m artwall "$@"` / `python3 -m artwall.overlay`. A failed
-run prints to the overlay's stderr and is skipped; it doesn't touch the stamp, so
-the next minute's run retries. On Sway the overlay is a child of Sway, so it and
+is a small shell launcher that sets `PYTHONPATH` to the repo and execs
+`python3 -m artwall "$@"`. A failed
+run prints to the daemon's stderr and is skipped; it doesn't touch the stamp, so
+the next minute's run retries. On Sway the daemon is a child of Sway, so it and
 its children inherit `SWAYSOCK` and `swaymsg` works with no environment import
 (`swaymsg` talks to the IPC socket, it does not need `WAYLAND_DISPLAY`). Nothing
 is pip-installed, so the checkout must stay put — the launch line points at it.
 
 Rotation is self-throttled via `config.stamp`'s mtime — each oneshot run exits
-straight away. The one persistent process of ours is the `artwall.overlay`
-daemon. The
-overlay also runs the gallery's loopback HTTP server on a background thread for
+straight away. The one persistent process of ours is the daemon. It
+also runs the gallery's loopback HTTP server on a background thread for
 its own lifetime, and publishes on another — both on by default, opt out with
-`--no-serve-stars` / `--no-publish-stars` (`bin/artwall-overlay` passes `"$@"`
+`--no-serve-stars` / `--no-publish-stars` (`bin/artwall` passes `"$@"`
 through). There is no standalone gallery command, which is what makes "exactly one
 gallery" structural rather than enforced. The
 trash outlives it: only the gallery's "Delete forever" button removes a painting.

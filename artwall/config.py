@@ -105,9 +105,9 @@ class Config:
     movements: list[str] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=lambda: list(DEFAULT_COLLECTIONS))
-    # the overlay caption's point size; None = the desktop's own UI font size.
+    # the caption's point size; None = the desktop's own UI font size.
     font_size: int | None = None
-    # overlay placement: which corner, and the inset in device pixels from the
+    # caption placement: which corner, and the inset in device pixels from the
     # screen edges — or from the edge of any panel or bar there. corner is one of
     # top-left/top-right/bottom-left/bottom-right.
     caption_corner: str = "bottom-right"
@@ -175,7 +175,7 @@ class Config:
         return self.cache_dir / f"current-{name}.jpg"
 
     def caption_file(self, name: str) -> Path:
-        """Where `run()` writes a display's caption + link for the overlay to read."""
+        """Where `run()` writes a display's caption + link for the daemon to read."""
         return self.cache_dir / f"caption-{name}.json"
 
     @property

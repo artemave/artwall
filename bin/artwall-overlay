@@ -1,6 +1,0 @@
-#!/bin/sh
-# Run the caption overlay from this checkout: put the package on the import path
-# and exec the long-lived widget. Needs PyGObject + gtk-layer-shell.
-# Args (--serve-stars, --publish-stars) pass through.
-root="$(cd "$(dirname "$0")/.." && pwd)"
-exec env PYTHONPATH="$root" python3 -m artwall.overlay "$@"

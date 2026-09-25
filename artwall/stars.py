@@ -4,13 +4,13 @@ Everything lives together under `config.data_dir` — `stars.json`, the painting
 in `images/`, and the `stars.html` that links to them by *relative* path. Copy or
 back up that one directory and the gallery still opens, offline, anywhere.
 
-Starring is driven by the interactive overlay, which shells out to
+Starring is driven by the daemon's caption, which shells out to
 `artwall --star <output>` rather than downloading on its GTK main loop. The
-overlay already has the whole painting record on screen (`run()` wrote it to
+caption already has the whole painting record on screen (`run()` wrote it to
 `caption-<output>.json`), so `star()` never has to look the painting up again —
 it only fetches the image bytes.
 
-**Why the gallery is a server.** The overlay's ★ can only unstar the painting
+**Why the gallery is a server.** The caption's ★ can only unstar the painting
 currently on that display, so the gallery has to be able to remove an older one —
 and a `file://` page cannot delete a file. `start_gallery()` therefore renders the
 page over a loopback `http.server` and takes unstar, restore and empty-trash as
@@ -19,10 +19,10 @@ plain form POSTs (no JavaScript; a 303 sends the browser back to `/`). The stati
 where there is no server, and its job is to make the backed-up directory readable
 anywhere.
 
-**The overlay owns it.** There is no standalone gallery command, so there is no
-"replace the previous one" dance and no PID file: one overlay (guaranteed by its
+**The daemon owns it.** There is no standalone gallery command, so there is no
+"replace the previous one" dance and no PID file: one daemon (guaranteed by its
 own `supersede_running_instances()`) means one gallery, structurally. `publish()`
-is called from here on every mutation, and from the overlay after a star, which is
+is called from here on every mutation, and from the daemon after a star, which is
 why it takes a lock — those callers are on different threads.
 
 **Unstarring is never destructive.** It *moves* the painting into `.trash/`
@@ -72,7 +72,7 @@ WIKIMEDIA_COMMONS_URL = "https://commons.wikimedia.org/"
 PUBLIC_TITLE = "artwall - stars"
 
 # One publish at a time. Its callers are concurrent — the gallery runs a thread per
-# request, and the overlay publishes on its own thread after a star — and two builds
+# request, and the daemon publishes on its own thread after a star — and two builds
 # at once would interleave one's `_prune` with the other's copies.
 _PUBLISHING = threading.Lock()
 
@@ -339,7 +339,7 @@ def is_starred(stars: list[Star], key: str) -> bool:
 def star(config: Config | None = None, *, output: str) -> bool:
     """Toggle the star on whatever painting is currently shown on `output`.
 
-    Reads the record `run()` left for the overlay, so this needs no Wikidata
+    Reads the record `run()` left for the caption, so this needs no Wikidata
     lookup — only the image fetch. The archive is written *before* the list is
     saved, so a failed download leaves no star pointing at a missing image.
     Returns whether the painting is now starred.
@@ -356,7 +356,7 @@ def star(config: Config | None = None, *, output: str) -> bool:
         url = wikidata.image_url(config.commons_url, record["image"], config.stars_image_width)
         web.download(url, image)
     else:
-        # The overlay's ★ is a toggle, not the gallery's delete: clicking it again
+        # The caption's ★ is a toggle, not the gallery's delete: clicking it again
         # re-downloads. No trash, nothing to restore.
         image.unlink()
     save(config, stars)
@@ -366,7 +366,7 @@ def star(config: Config | None = None, *, output: str) -> bool:
 def star_link(config: Config, link: str) -> tuple[Star, str]:
     """Star a painting from a pasted Wikipedia image link.
 
-    Unlike the overlay's ★ this is *not* a toggle — you paste a link to add a
+    Unlike the caption's ★ this is *not* a toggle — you paste a link to add a
     painting, so pasting one that's already hung says so and changes nothing
     rather than quietly removing it. A painting still in the trash is restored
     (image, position and all) instead of re-downloaded: adding it afresh would
@@ -775,7 +775,7 @@ def write_page(config: Config) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# the publishable static site — maintained by the overlay's `--publish-stars`
+# the publishable static site — maintained by the daemon's `--publish-stars`
 # --------------------------------------------------------------------------- #
 
 
@@ -816,11 +816,11 @@ def publish(
     to it, no JavaScript, and every link inside is relative, so it works from a
     bare static host or a subdirectory of one.
 
-    Incremental (`_stale`) and self-cleaning (`_prune`), so the overlay can call it
+    Incremental (`_stale`) and self-cleaning (`_prune`), so the daemon can call it
     after every change to the collection and pay only for what actually moved.
 
     Serialised on `_PUBLISHING`, because the callers are concurrent: the gallery
-    runs a thread per request, and the overlay publishes on a thread of its own
+    runs a thread per request, and the daemon publishes on a thread of its own
     after a star. Two builds at once would interleave a `_prune` with another
     build's copies and delete a painting it had just written.
     """
@@ -850,7 +850,7 @@ def publish(
 
 
 # --------------------------------------------------------------------------- #
-# the gallery server — hosted by the overlay (`--serve-stars`)
+# the gallery server — hosted by the daemon (`--serve-stars`)
 # --------------------------------------------------------------------------- #
 
 
@@ -1002,14 +1002,14 @@ def start_gallery(
 ) -> GalleryServer:
     """Bind a gallery server and refresh the archived page. Nothing is opened.
 
-    The overlay is the only caller: it hosts the gallery for its own lifetime and
+    The daemon is the only caller: it hosts the gallery for its own lifetime and
     has a button to open it, rather than launching a browser at login.
 
     **There is no "replace the previous gallery" step, and no PID file.** There
     used to be, because `artwall --stars` could be run twice and leave two servers
     answering two ports. One gallery is now structural instead of enforced: the
-    overlay is the only thing that serves one, and `supersede_running_instances()`
-    already guarantees a single overlay.
+    daemon is the only thing that serves one, and `supersede_running_instances()`
+    already guarantees a single daemon.
     """
     write_page(config)
     if republish:

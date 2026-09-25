@@ -22,10 +22,10 @@ genres = ["Q191163"]               # landscape art
 # Caption / label language (falls back to any language when unavailable).
 language = "en"
 
-# The overlay caption's point size. Omit to use the desktop's own UI font size.
+# The caption's point size. Omit to use the desktop's own UI font size.
 # font_size = 11
 
-# Overlay placement: which corner, and the inset in pixels from the screen edges —
+# Caption placement: which corner, and the inset in pixels from the screen edges —
 # or from the edge of any panel or bar there.
 # corner is one of top-left / top-right / bottom-left / bottom-right.
 caption_corner = "bottom-right"
@@ -39,7 +39,7 @@ caption_pad_y = 64
 stars_image_width = 2560
 
 # Longest side of the images the *published* gallery loads in its grid (the
-# overlay maintains it under the data directory's public/). The full-size archives
+# daemon maintains it under the data directory's public/). The full-size archives
 # above are exported alongside and each tile links to one, so this only bounds the
 # page weight — which is the difference between usable and not on a phone.
 public_image_width = 1200

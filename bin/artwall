@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run artwall from this checkout: put the package on the import path and exec it.
-# Used by the `exec` line in the Sway config; args (--min-interval, --preview)
-# pass through.
+# With no arguments it's the session app (launched from the Sway config or a
+# Plasma autostart entry); one-shot actions (--once, --preview, --find) pass through.
 root="$(cd "$(dirname "$0")/.." && pwd)"
 exec env PYTHONPATH="$root" python3 -m artwall "$@"

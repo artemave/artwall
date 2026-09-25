@@ -1,8 +1,8 @@
 # Your artwall gallery
 
 This repo *is* `~/.local/share/artwall` — clone it there (or move an existing
-one's contents in) and [artwall](https://github.com/artemave/artwall)'s
-overlay uses it as-is. `.trash/` is gitignored, so unstarring a painting never
+one's contents in) and [artwall](https://github.com/artemave/artwall)
+uses it as-is. `.trash/` is gitignored, so unstarring a painting never
 gets pushed; everything else — `stars.json`, `images/`, `stars.html` and the
 published `public/` site — does.
 

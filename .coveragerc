@@ -5,9 +5,9 @@ source = artwall
 # hitting the live API, swaymsg and magick, so it's excluded rather than mocked.
 omit =
     artwall/__main__.py
-    # The caption overlay needs a GTK toolkit + a live display, so it can't run
-    # under the headless test suite.
-    artwall/overlay.py
+    # The session app (captions, rotation) needs a GTK toolkit + a live display,
+    # so it can't run under the headless test suite.
+    artwall/daemon.py
 
 [report]
 show_missing = True

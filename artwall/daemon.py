@@ -1,14 +1,15 @@
-"""The caption overlay.
+"""The daemon: what `artwall` runs with no action, launched once with the session.
 
-A small, persistent GTK layer-shell widget — launched once with the desktop session —
-that shows each display's current painting caption as a clickable link (it opens
-the Wikipedia article), followed by three buttons: a star that adds the painting
-to the gallery, a gallery button that opens the whole collection, and a refresh
-that re-rolls the wallpaper on that one display. It reads the per-output caption
-files `run()` writes (`caption-<output>.json`) and updates whenever they change.
+It rotates the wallpaper — a `--once --throttle` child at startup and every
+minute, and a re-roll on monitor hotplug — and shows each display's caption: a
+small GTK layer-shell widget with the painting as a clickable link (it opens the
+Wikipedia article), followed by three buttons: a star that adds the painting to
+the gallery, a gallery button that opens the whole collection, and a refresh that
+re-rolls the wallpaper on that one display. It reads the per-output caption files
+`run()` writes (`caption-<output>.json`) and updates whenever they change.
 
 **This is the daemon, so this is where the gallery's lifetime belongs.** With
-`--serve-stars` the overlay binds the gallery server itself, on a background
+`--serve-stars` it binds the gallery server itself, on a background
 thread, for as long as it runs — so the collection is always one click away, with
 no foreground command to start and remember to Ctrl-C. With `--publish-stars` it
 also keeps the published static site in step: the gallery's own buttons republish
@@ -18,14 +19,14 @@ which is the thing no one-shot command could have promised, since the two paths
 live in different processes.
 
 This is the one component that needs a GUI toolkit (PyGObject + gtk-layer-shell)
-and a long-lived process, so it lives outside the stdlib-only oneshot and is
-launched separately (`python3 -m artwall.overlay`). It can't run under the
+and a long-lived process, so `__main__` imports it only when no one-shot action
+was asked for, keeping those stdlib-only. It can't run under the
 headless test suite, so it's excluded from coverage — which is why everything it
 does beyond GTK wiring is a call into a tested function in `stars`.
 """
 from __future__ import annotations
 
-import argparse
+import ctypes
 import json
 import os
 import signal
@@ -55,6 +56,9 @@ CORNER_EDGES = {
     "bottom-right": (Layer.Edge.BOTTOM, Layer.Edge.RIGHT),
 }
 
+PROCESS_NAME = "artwall"
+PR_SET_NAME = 15  # prctl(2)
+
 # How often to ask artwall for a new painting. `--throttle` turns all but one
 # call per `Config.min_interval` into a no-op, so this only bounds how late a
 # rotation can be — after a suspend, say.
@@ -72,8 +76,15 @@ window { background-color: transparent; }
 """
 
 
+def set_process_name() -> None:
+    """Name this process `PROCESS_NAME` (its `/proc/<pid>/comm`). Its command line
+    is `python3 -m artwall`, the same as every one-shot child it spawns, so the
+    name is what tells the daemon apart."""
+    ctypes.CDLL(None).prctl(PR_SET_NAME, PROCESS_NAME.encode(), 0, 0, 0)
+
+
 def supersede_running_instances() -> None:
-    """Kill any other running overlay so the newest launch wins — no stacked,
+    """Kill any other running daemon so the newest launch wins — no stacked,
     duplicate caption surfaces, and a relaunch (e.g. after a code change) cleanly
     replaces a stale instance instead of orphaning it."""
     me = os.getpid()
@@ -81,10 +92,10 @@ def supersede_running_instances() -> None:
         if not entry.isdigit() or int(entry) == me:
             continue
         try:
-            cmdline = (Path("/proc") / entry / "cmdline").read_bytes()
+            comm = (Path("/proc") / entry / "comm").read_text().strip()
         except OSError:
             continue  # the process vanished between listing and reading — fine
-        if b"python" in cmdline and b"artwall.overlay" in cmdline:
+        if comm == PROCESS_NAME:
             try:
                 os.kill(int(entry), signal.SIGTERM)
             except OSError:
@@ -280,14 +291,14 @@ class Caption:
         self._spawn(["--output", self.name], self.refresh, lambda: None)
 
     def _open_gallery(self, *_args: object) -> None:
-        """Open the whole starred collection — the live gallery if this overlay is
+        """Open the whole starred collection — the live gallery if this daemon is
         serving one, the archived `stars.html` otherwise (see `gallery_url`)."""
         subprocess.Popen(["xdg-open", self.gallery_url])
 
     def _toggle_star(self, *_args: object) -> None:
         """Add this painting to the gallery, or take it out. Shelled out rather than
         done inline: starring downloads the full-size image to archive it, which would
-        freeze the overlay. Nothing rewrites the caption file, so refresh the icon
+        freeze the caption. Nothing rewrites the caption file, so refresh the icon
         ourselves once it's done."""
         self._spawn(["--star", self.name], self.star, self._after_star)
 
@@ -330,32 +341,6 @@ class Caption:
         self.window.show_all()
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Both features are **on by default** — they're what the daemon is for — so the
-    flags exist to be *negated* (`--no-serve-stars`, `--no-publish-stars`)."""
-    parser = argparse.ArgumentParser(
-        prog="artwall.overlay",
-        description="artwall's caption overlay.",
-    )
-    parser.add_argument(
-        "--serve-stars",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Host the starred gallery for as long as the overlay runs, so the gallery "
-        "button opens the live, editable page. With --no-serve-stars it opens the "
-        "archived, read-only stars.html instead, and nothing listens on a port.",
-    )
-    parser.add_argument(
-        "--publish-stars",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Keep the uploadable static site under the data directory's public/ in "
-        "step with the collection — rebuilt at startup and on every star, unstar, "
-        "restore and paste. --no-publish-stars builds no site at all.",
-    )
-    return parser.parse_args(argv)
-
-
 def _publish_async(config: Config) -> None:
     """Rebuild the published site off the GTK main loop.
 
@@ -382,21 +367,21 @@ def gallery_url(config: Config, server: stars.GalleryServer | None) -> str:
     return config.stars_page.as_uri()
 
 
-def main(argv: list[str] | None = None) -> None:
-    args = parse_args(argv)
+def main(serve_stars: bool, publish_stars: bool) -> None:
+    set_process_name()
     supersede_running_instances()  # last launch wins; never stack duplicates
     config = Config.load()
     desktop = detect(os.environ)
 
     server: stars.GalleryServer | None = None
-    if args.serve_stars:
-        server = stars.start_gallery(config, args.publish_stars)
+    if serve_stars:
+        server = stars.start_gallery(config, publish_stars)
         threading.Thread(target=server.serve_forever, daemon=True).start()
     else:
         # No server, so the button falls back to `stars.html` — make sure there is
         # one, and that it matches the list, before anything can click it.
         stars.write_page(config)
-        if args.publish_stars:
+        if publish_stars:
             _publish_async(config)
 
     display = Gdk.Display.get_default()
@@ -422,7 +407,7 @@ def main(argv: list[str] | None = None) -> None:
             monitor = monitor_at(display, output.x, output.y)
             if monitor is not None:
                 captions[output.name] = Caption(
-                    config, desktop, monitor, output.name, font, url, args.publish_stars
+                    config, desktop, monitor, output.name, font, url, publish_stars
                 )
 
     rebuild()
@@ -430,11 +415,11 @@ def main(argv: list[str] | None = None) -> None:
     display.connect("monitor-removed", rebuild)
     display.connect(
         "monitor-added",
-        lambda *_: artwall("--throttle", "--min-interval", HOTPLUG_MIN_INTERVAL),
+        lambda *_: artwall("--once", "--throttle", "--min-interval", HOTPLUG_MIN_INTERVAL),
     )
 
     def rotate() -> bool:
-        artwall("--throttle")
+        artwall("--once", "--throttle")
         return True  # keep the timer
 
     rotate()
@@ -457,6 +442,3 @@ def main(argv: list[str] | None = None) -> None:
 
     Gtk.main()
 
-
-if __name__ == "__main__":
-    main()

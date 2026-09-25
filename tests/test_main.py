@@ -15,6 +15,14 @@ class ArgGuards(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
         self.assertIn("--min-interval has no effect without --throttle", stderr.getvalue())
 
+    def test_throttle_without_once_is_rejected(self):
+        # without --once, no flags means the session app, which has no use for it
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(stderr):
+            main(["--throttle"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("--throttle has no effect without --once", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

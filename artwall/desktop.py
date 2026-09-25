@@ -16,7 +16,7 @@ KSCREEN_SIDEWAYS = (2, 8)
 
 class Output(NamedTuple):
     """A connected display: its name, pixel size, HiDPI scale factor, and the
-    logical position of its top-left corner (how the overlay finds its GTK monitor)."""
+    logical position of its top-left corner (how the daemon finds its GTK monitor)."""
 
     name: str
     width: int

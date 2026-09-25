@@ -16,11 +16,11 @@ def caption(painting: dict[str, Any]) -> str:
 
 
 def record(key: str, painting: dict[str, str], url: str) -> dict[str, Any]:
-    """A painting reduced to what the overlay and the star gallery need.
+    """A painting reduced to what the caption and the star gallery need.
 
     `run()` writes this as `caption-<output>.json`; starring copies it verbatim
     into the star list. It carries the image filename and the link, so neither
-    the overlay nor the gallery has to go back to Wikidata to draw a painting.
+    the caption nor the gallery has to go back to Wikidata to draw a painting.
 
     `key` is the painting's identity, and it is namespaced because paintings now
     arrive from two places: `Q<n>` for a Wikidata item (the wallpaper, and any

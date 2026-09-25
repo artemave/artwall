@@ -2,9 +2,9 @@
 
 Rotate your [Sway](https://swaywm.org/) or [KDE Plasma](https://kde.org/plasma-desktop/)
 wallpaper through random paintings from
-[Wikidata](https://www.wikidata.org/). The caption (artist, title, date) is shown
-as an overlay with a clickable link to the painting's Wikipedia page — and a
-**star** button that keeps the ones you like.
+[Wikidata](https://www.wikidata.org/). The caption (artist, title, date) sits in a
+corner with a clickable link to the painting's Wikipedia page — and a **star**
+button that keeps the ones you like.
 
 
 
@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/2f3c4325-da6f-43f9-b121-dbcc80158574
 
 - Python 3.11+
 - Sway, or KDE Plasma 6 in a Wayland session
-- PyGObject + gtk-layer-shell (GTK 3) - for the caption overlay
+- PyGObject + gtk-layer-shell (GTK 3) - for the caption
 
 Install the external tools (you already have your desktop and Python). PyGObject and GTK 3
 are usually present on a desktop install - the commands list them anyway, so the
@@ -35,12 +35,12 @@ sudo pacman -S imagemagick gtk-layer-shell python-gobject          # Arch
 Run it from this checkout - there's nothing to install. It detects which desktop
 it's running under (Sway via `SWAYSOCK`, Plasma via `XDG_CURRENT_DESKTOP`).
 
-The overlay (`bin/artwall-overlay`) is the one thing to launch with your
-session: it shows the captions, sets a painting at login, changes it every
-`Config.min_interval` (30 min by default), and re-rolls when a monitor is
-plugged in, so the new screen gets one too.
+Start `bin/artwall` with your session. It sets a painting at login, changes it
+every `Config.min_interval` (30 min by default), re-rolls when a monitor is
+plugged in so the new screen gets one too, and shows each display's
+[caption](#the-caption).
 
-> The overlay also hosts your [gallery](#starring-paintings) and keeps the
+> artwall also hosts your [gallery](#starring-paintings) and keeps the
 > [published copy](#publishing-the-gallery) in step, both on by default. Opt out
 > with `--no-serve-stars` / `--no-publish-stars`.
 
@@ -49,21 +49,21 @@ plugged in, so the new screen gets one too.
 Add to your Sway config (`~/.config/sway/config`), pointing at where you cloned it:
 
 ```
-exec_always /path/to/artwall/bin/artwall-overlay
+exec_always /path/to/artwall/bin/artwall
 ```
 
-`exec_always` restarts it on `swaymsg reload`; a new overlay replaces the old one.
+`exec_always` restarts it on `swaymsg reload`; a new artwall replaces the old one.
 
 ### KDE Plasma
 
-Add an autostart entry, `~/.config/autostart/artwall-overlay.desktop`, pointing
-at where you cloned it:
+Add an autostart entry, `~/.config/autostart/artwall.desktop`, pointing at where
+you cloned it:
 
 ```ini
 [Desktop Entry]
 Type=Application
-Name=artwall overlay
-Exec=/path/to/artwall/bin/artwall-overlay
+Name=artwall
+Exec=/path/to/artwall/bin/artwall
 ```
 
 ### By hand
@@ -71,7 +71,7 @@ Exec=/path/to/artwall/bin/artwall-overlay
 To drive it by hand, from the checkout:
 
 ```bash
-./bin/artwall              # set the wallpaper once
+./bin/artwall --once       # set a new wallpaper once, and exit
 ./bin/artwall --preview    # open a random painting without changing the wallpaper
 ./bin/artwall --find monet # look up Wikidata QIDs for the config (see below)
 ```
@@ -86,7 +86,7 @@ Each caption has a **★ button**.
 Click it and the painting is added to your gallery. The **gallery button** beside
 it opens the collection.
 
-The overlay hosts that gallery itself, for as long as your session lasts, on a
+artwall hosts that gallery itself, for as long as your session lasts, on a
 port the OS picks. There is nothing to start and nothing to remember to stop —
 it's just always there, behind the button.
 
@@ -103,7 +103,7 @@ That unstar button is why the gallery is a little loopback web server rather tha
 a file the button opens — a page loaded from `file://` can't delete anything. It
 binds `127.0.0.1`, serves only your archived paintings, and needs no JavaScript.
 
-**There is exactly one gallery, structurally.** The overlay is the only thing that
+**There is exactly one gallery, structurally.** artwall is the only thing that
 serves one, and it already replaces any previous instance of itself on launch, so
 two servers answering two ports is not a state this can reach. (It used to be:
 there was a standalone `artwall --stars` you could run twice, and a PID file and a
@@ -165,7 +165,7 @@ all.
 The trash survives reboots. The only irreversible act in artwall is the
 **Delete n paintings forever** button on the trash page.
 
-> The overlay's ★ works differently: it's a toggle, not a delete. Clicking it a
+> The caption's ★ works differently: it's a toggle, not a delete. Clicking it a
 > second time unstars the painting outright (clicking again re-downloads it).
 > Only the gallery's ★ uses the trash.
 
@@ -193,7 +193,7 @@ back it up, sync it, or copy it to another machine, and `stars.html` still opens
 in any browser — offline, with the images intact. It sits outside `~/.cache/`
 precisely so that wiping the cache can't take your collection with it.
 
-That archived `stars.html` is rewritten when the overlay starts and on every
+That archived `stars.html` is rewritten when artwall starts and on every
 unstar, restore or delete. It's the same gallery *without* the buttons or the
 trash link, since a page opened from `file://` has no server to post them to.
 
@@ -204,7 +204,7 @@ Set `stars_image_width` in the config to archive at a different size (default
 
 `stars.html` is for *you* — it lives next to `stars.json` and `.trash/`, so you
 can't upload the directory without publishing the record of every painting you
-ever removed. So the overlay maintains a separate copy that you *can* upload:
+ever removed. So artwall maintains a separate copy that you *can* upload:
 
 ```
 ~/.local/share/artwall/public/
@@ -224,7 +224,7 @@ so the grid loads the thumbnails (`public_image_width`, default `1200` — enoug
 for a phone's single column at 3x) and only a tap pulls the full scan. The page
 itself is responsive, dark-mode aware and has no hover-only affordances.
 
-It's rebuilt when the overlay starts and after **every** way a painting can enter
+It's rebuilt when artwall starts and after **every** way a painting can enter
 or leave the collection — starring one from a caption, and unstarring, restoring
 or pasting one in the gallery. Only what changed is rebuilt, and a painting you
 unstarred is *removed* from the site, since otherwise its image would go on being
@@ -308,10 +308,9 @@ right when you log in. (If you change `collections`, that new set is fetched on
 first use, per the note above.) Maintainers regenerate the shipped catalogue with
 `make catalogue` when the default set changes.
 
-### The caption overlay
+### The caption
 
-The caption is a small, persistent widget (`bin/artwall-overlay`, launched with
-your session) that shows it as a clickable link to the painting's Wikipedia
+Each display's caption is a small widget that shows the painting as a clickable link to the painting's Wikipedia
 article (falling back to its Wikidata page), followed by a **★ button** that adds
 the painting to your [gallery](#starring-paintings), a **gallery button** that
 opens the whole collection, and a **refresh button** that re-rolls the wallpaper
