@@ -9,12 +9,10 @@ A standard-library-only Python tool that sets a random painting from
 image — ~400k) as the **Sway** or **KDE Plasma** (Wayland) desktop wallpaper. The painting is composed (via
 ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); the
 letterbox margins are filled with a soft gradient sampled from the painting's own
-colours. The caption (artist/title/date) is shown one of two ways, set by
-`caption_mode`: `"interactive"` (default) draws it as an interactive overlay (a
-separate `artwall.overlay` process — see below) with a clickable Wikipedia link,
-a ★ button that adds the painting to a **starred gallery**, and a refresh button
-that re-rolls that one display, leaving the wallpaper
-caption-free; `"text"` burns it into the corner. The default
+colours. The caption (artist/title/date) is never drawn into the wallpaper: an
+overlay (a separate `artwall.overlay` process — see below) shows it with a
+clickable Wikipedia link, a ★ button that adds the painting to a **starred
+gallery**, and a refresh button that re-rolls that one display. The default
 `collections` is a curated set of clean-scan, open-access museums
 (`DEFAULT_COLLECTIONS` — Rijksmuseum, Cleveland, …) so the wallpaper is the
 artwork, not a framed-on-the-wall photo; its catalogue **ships pre-fetched**
@@ -22,20 +20,17 @@ artwork, not a framed-on-the-wall photo; its catalogue **ships pre-fetched**
 the rate-limited WDQS. `collections = []` draws from *all* ~400k paintings. A TOML
 file at `~/.config/artwall/config.toml` narrows it via a date window + QID filters
 (`movements`/`genres`/`artists`/`collections`) and sets
-`language`/`font_size`/`caption_mode`. It's a **oneshot** — sets the
+`language`/`font_size`. It's a **oneshot** — sets the
 wallpaper once and exits. On Sway, rotation is driven by
 Sway events, not a daemon: the Sway config subscribes to window-focus events and
 runs artwall on each, with `--throttle` (using `Config.min_interval`) limiting it
 to ~every 30 min. Launched as a child of Sway, it inherits `SWAYSOCK` — no
 systemd, no env import. Plasma has no such event stream, so there an autostart
-loop runs `--throttle` every minute. The caption is drawn in the desktop's system
-font (`gsettings` on Sway, `kdeglobals` on Plasma, + `fc-match` to resolve the
-file) at a point size
-scaled per display, so it looks the same physical size on HiDPI screens;
-`font_size` overrides the size. The **core oneshot has no third-party Python
+loop runs `--throttle` every minute. The overlay draws the caption in GTK's UI
+font; `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
-tools (`swaymsg`, `kscreen-doctor`, `gdbus`, `magick`, `gsettings`, `fc-match`) are fine since we already
-shell out. The one exception is `artwall/overlay.py` (the `"interactive"`-mode widget),
+tools (`swaymsg`, `kscreen-doctor`, `gdbus`, `magick`) are fine since we already
+shell out. The one exception is `artwall/overlay.py` (the caption widget),
 which needs PyGObject + gtk-layer-shell — it's the lone GUI/daemon component and
 is quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs).
 
@@ -70,7 +65,7 @@ it can be tested without network or `swaymsg`.
   `commons_api_url` for Commons' own Action API, `commons_url`
   for images), `ids_ttl`, the content knobs
   (`date_begin`/`date_end`, `language`, `artists`/`movements`/`genres`/
-  `collections` QID lists, `font_size`, `caption_mode`, `stars_image_width`) and
+  `collections` QID lists, `font_size`, `stars_image_width`) and
   `min_interval`.
   `collections` defaults to `DEFAULT_COLLECTIONS` (curated clean-scan museums).
   `caption_file(name)` is where `run()` writes a display's painting record for the
@@ -274,18 +269,17 @@ it can be tested without network or `swaymsg`.
   as pending too, rather than as "0 ahead", since a comparison that can't even
   be made is not evidence that nothing needs sending.
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
-  compose + optional caption; `text=None` composes the painting bare, for
-  `"interactive"` mode — plus `thumbnail_command`, the published site's web-sized
-  copy), the desktop queries and wallpaper setters `desktop.py` runs (`swaymsg`,
-  `gsettings`, `kscreen-doctor`, `kreadconfig6`, and `plasma_wallpaper_command` —
-  a Plasma desktop script sent over `gdbus`), and the `git` commands
+  compose, plus `thumbnail_command`, the published site's web-sized copy), the
+  desktop queries and wallpaper setters `desktop.py` runs (`swaymsg`,
+  `kscreen-doctor`, and `plasma_wallpaper_command` — a Plasma desktop script sent
+  over `gdbus`), and the `git` commands
   `sync()`/`sync_pending()` run.
 - `artwall/desktop.py` — everything compositor-specific, behind one `Desktop`
   NamedTuple: `outputs()` (each an `Output` carrying name + pixel size + HiDPI
-  scale), `font()` (file + point size) and `wallpaper(name, path)` (the argv that
-  sets one display's wallpaper). Two instances: `SWAY` (`swaymsg`, the GTK font
-  from `gsettings`) and `PLASMA` (`kscreen-doctor -j`, the font from
-  `kdeglobals`); `detect(environ)` picks one from `SWAYSOCK` /
+  scale + logical position, which is how the overlay finds its GTK monitor) and
+  `wallpaper(name, path)` (the argv that sets one display's wallpaper). Two
+  instances: `SWAY` (`swaymsg`) and `PLASMA` (`kscreen-doctor -j`, and a desktop
+  script over D-Bus); `detect(environ)` picks one from `SWAYSOCK` /
   `XDG_CURRENT_DESKTOP` and refuses anything else. Plasma addresses a desktop by
   screen index, so its script resolves the connector with `screenForConnector()`.
   **Plasma ignores a wallpaper URL it already shows** — rewriting
@@ -296,10 +290,8 @@ it can be tested without network or `swaymsg`.
   only)` injects `rng`, `runner` and `desktop` (defaulting to `random`,
   `subprocess.run` and `desktop.detect(os.environ)`) so the full flow can be driven deterministically; `only` restricts the run to a
   single named output (the overlay's refresh button → `--output`). `search_entities()`
-  backs `--find`. In `"interactive"` mode it skips the caption burn, resolves the
-  Wikipedia URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
-  `_render()` returns a `Rendered` NamedTuple (qid + painting dict + url) rather
-  than a widening tuple.
+  backs `--find`. For each display it resolves the Wikipedia URL (`_wiki_url`)
+  and writes `caption_file(name)` for the overlay.
   `resolve_link(config, link)` backs the gallery's paste box: a pasted Wikipedia
   image URL → Commons file → the artwork's QID → the **same** `selection.record()`
   the wallpaper writes. That equivalence is the whole point — a pasted painting is
@@ -311,9 +303,9 @@ it can be tested without network or `swaymsg`.
   *that*). Every rejection raises `LinkError`, whose message is written to be read
   by whoever pasted the link, so the gallery can show it verbatim instead of
   mapping exception types to prose.
-- `artwall/overlay.py` — the `"interactive"`-mode interactive caption: a persistent
-  GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched from the
-  Sway config) showing one `BOTTOM`-layer clickable caption per display — each
+- `artwall/overlay.py` — the caption: a persistent
+  GTK3 + gtk-layer-shell widget (`python3 -m artwall.overlay`, launched with the
+  session) showing one `BOTTOM`-layer clickable caption per display — each
   followed by a ★ button (`--star <name>`), a gallery button (`xdg-open` on
   `gallery_url()`) and a refresh button that re-rolls that
   display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
@@ -353,8 +345,7 @@ that WDQS refresh fails (it's outage-prone), fall back to the stale cache — or
 bundle — rather than crashing; the stale mtime is left untouched so the next run
 retries and self-heals once WDQS recovers.
 `dump_catalogue()` / `make catalogue` regenerates the shipped seed) → query the
-active outputs (`desktop.outputs()`) and the system font (`desktop.font()`) →
-for each display,
+active outputs (`desktop.outputs()`) → for each display,
 pick a random QID and fetch its image filename + title/date via the Action API
 (`wbgetentities`), then a second `wbgetentities` for the creator's name (retry up
 to `ATTEMPTS`, same as a QID that has since lost its image, to skip one whose
@@ -362,24 +353,21 @@ native resolution — a Commons `imageinfo` call — is smaller than the display
 *both* sides: `commands.compose_command`'s aspect-preserving `-resize` would
 enlarge, and blur, it; `wikidata.fits()` is the check), build and
 download a width-capped Commons thumbnail, `magick`-compose it onto an
-`Output`-sized gradient canvas (whole painting; caption burned in only in
-`"text"` mode) at `current-<output>.jpg`, set it with `desktop.wallpaper()` (on
-Sway `swaymsg output <name> bg … fill`, a 1:1 blit since the canvas is already
-the display's size); in `"interactive"` mode
-also write `caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
+`Output`-sized gradient canvas (the whole painting) at `current-<output>.jpg`,
+set it with `desktop.wallpaper()` (on Sway `swaymsg output <name> bg … fill`, a
+1:1 blit since the canvas is already the display's size), and write
+`caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
 `config.stamp`. Selection is plain random — no persisted history — but QIDs
 already chosen this run are excluded so each display gets a *different* painting.
-The pick/download/compose step is `_render()` (takes the target width/height and
-a `burn_caption` flag), also used by `preview()` (the `--preview` flag), which
-always burns the caption (a preview is one self-contained image), composes at a
+The pick/download/compose step is `_render()` (takes the target width/height),
+also used by `preview()` (the `--preview` flag), which composes at a
 default 1920x1080, writes `preview.jpg`, opens it with `xdg-open`, and leaves the
 wallpaper untouched.
 
-`desktop.py`'s live readers (`sway_outputs()`, `gtk_font()`, `plasma_outputs()`,
-`kde_font()`) are the functions excluded from coverage (`# pragma: no cover`) —
-they need a live compositor / desktop; their pure parsing+math is split out and
-tested (`parse_outputs()`, `parse_kscreen_outputs()`, `parse_font_name()`,
-`parse_kde_font()`, and `app.scaled_pointsize()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
+`desktop.py`'s live readers (`sway_outputs()`, `plasma_outputs()`) are the
+functions excluded from coverage (`# pragma: no cover`) — they need a live
+compositor; their pure parsing is split out and tested (`parse_outputs()`,
+`parse_kscreen_outputs()`, and the overlay's `parse_font_name()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
 omit) — it can't run headless. All state is cached under `~/.cache/artwall/`;
 deleting it is a safe reset. The one exception is the starred gallery under
 `~/.local/share/artwall/` (`stars.json` + `images/` + `stars.html` + `.trash/`) —
@@ -412,7 +400,7 @@ to set a wallpaper at startup; one subscribing to window events that runs artwal
 per event with `--throttle`; one subscribing to output events with `--throttle
 --min-interval 5` so a monitor hotplug re-rolls (the short interval coalesces the
 event burst a single hotplug fires — any run sets every connected display, so the
-new screen gets a wallpaper); and, in `"interactive"` mode, `bin/artwall-overlay`
+new screen gets a wallpaper); and `bin/artwall-overlay`
 for the caption overlay daemon (which itself rebuilds its surfaces on monitor
 hotplug via `Gdk.Display` `monitor-added`/`monitor-removed`, and re-rolls a single
 display with `python3 -m artwall --output <name>` from its refresh button — the
@@ -428,9 +416,8 @@ environment import (`swaymsg` talks to the IPC socket, it does not need
 `exec` line points at it.
 
 Rotation itself is event-driven and self-throttled via `config.stamp`'s mtime —
-the oneshot never lingers. The one persistent process of ours is the optional
-`artwall.overlay` daemon (`"interactive"` mode only); in `"text"` mode there is none,
-and the only standing process is the stock `swaymsg -t subscribe` pipe. The
+the oneshot never lingers. The one persistent process of ours is the
+`artwall.overlay` daemon, beside the stock `swaymsg -t subscribe` pipes. The
 overlay also runs the gallery's loopback HTTP server on a background thread for
 its own lifetime, and publishes on another — both on by default, opt out with
 `--no-serve-stars` / `--no-publish-stars` (`bin/artwall-overlay` passes `"$@"`

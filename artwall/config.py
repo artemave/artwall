@@ -105,21 +105,14 @@ class Config:
     movements: list[str] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=lambda: list(DEFAULT_COLLECTIONS))
-    # caption point size; None = use the desktop's system font size (scaled per
-    # display). Set it to override with an explicit point size.
+    # the overlay caption's point size; None = the desktop's own UI font size.
     font_size: int | None = None
-    # caption placement: which corner, and the inset from the screen edges in
-    # pixels (absolute, so it sits the same fixed distance from the edge on every
-    # display). The interactive overlay measures it from the edge of any panel or
-    # bar instead. corner is one of top-left/top-right/bottom-left/bottom-right.
+    # overlay placement: which corner, and the inset in device pixels from the
+    # screen edges — or from the edge of any panel or bar there. corner is one of
+    # top-left/top-right/bottom-left/bottom-right.
     caption_corner: str = "bottom-right"
     caption_pad_x: int = 24
     caption_pad_y: int = 64
-    # how the caption is shown: "interactive" = an interactive overlay (a separate
-    # `python3 -m artwall.overlay` process) with a clickable Wikipedia link and a
-    # refresh button, and nothing burned into the wallpaper; "text" = burn the
-    # caption in, no overlay.
-    caption_mode: str = "interactive"
     # Width to archive a starred painting at. Big enough to keep and re-use,
     # small enough not to pull a Commons original (those run to 100+ MB).
     stars_image_width: int = 2560

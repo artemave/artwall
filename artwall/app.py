@@ -7,7 +7,7 @@ import random
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from . import cache, commands, selection, web, wikidata
 from .config import Config
@@ -17,24 +17,9 @@ from .desktop import Desktop, detect
 # before giving up. Hits are rare, so this almost always succeeds first try.
 ATTEMPTS = 10
 
-# Caption presentation: burn text into the wallpaper, or show the interactive overlay.
-CAPTION_MODES = ("interactive", "text")
-
 # Preview has no display to target, so render it at a common desktop size.
 PREVIEW_WIDTH, PREVIEW_HEIGHT = 1920, 1080
 
-# Reference DPI for an unscaled display (the X/CSS convention). A point is 1/72
-# inch, so a point maps to BASE_DPI/72 device pixels before the output's scale.
-BASE_DPI = 96
-
-
-class Rendered(NamedTuple):
-    """What `_render()` composed: the painting it picked, and its article link
-    (empty when the caption was burned in, where no link is needed)."""
-
-    qid: int
-    painting: dict[str, str]
-    url: str
 
 
 def painting_ids(config: Config) -> list[int]:
@@ -279,11 +264,6 @@ def _record_from_template(config: Config, title: str, media_id: str) -> dict[str
     )
 
 
-def scaled_pointsize(point_size: int, scale: float) -> int:
-    """A point size as the magick pointsize for a display at `scale` (HiDPI-aware)."""
-    return round(point_size * BASE_DPI * scale / 72)
-
-
 def _sitelink(config: Config, entity_id: str) -> str | None:
     """The entity's Wikipedia article URL (in `config.language`), or None."""
     result = _get_entity(config, entity_id, "sitelinks/urls")
@@ -310,35 +290,13 @@ def _render(
     image_path: Path,
     width: int,
     height: int,
-    scale: float,
-    font: str | None,
-    point_size: int,
-    burn_caption: bool,
-) -> Rendered:
-    """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`.
-
-    When `burn_caption`, the caption is drawn in `font` at `point_size`, converted
-    to a pixel size for this display's `scale` so it looks the same physical size
-    on any resolution; otherwise the painting is composed bare and a Wikipedia
-    link is resolved (interactive-overlay mode).
-    """
+) -> tuple[int, dict[str, str]]:
+    """Pick a painting (avoiding `exclude`), download it, and compose it for `width`x`height`."""
     qid, painting = choose(config, ids, rng, exclude, width, height)
     image = wikidata.image_url(config.commons_url, painting["image"], width)
     web.download(image, image_path)
-    command = commands.compose_command(
-        image_path,
-        selection.caption(painting) if burn_caption else None,
-        width,
-        height,
-        scaled_pointsize(point_size, scale),
-        config.caption_corner,
-        config.caption_pad_x,
-        config.caption_pad_y,
-        font,
-    )
-    runner(command, check=True)
-    url = "" if burn_caption else _wiki_url(config, qid, painting["creator_qid"])
-    return Rendered(qid, painting, url)
+    runner(commands.compose_command(image_path, width, height), check=True)
+    return qid, painting
 
 
 @contextlib.contextmanager
@@ -371,7 +329,8 @@ def run(
     min_interval: float | None = None,
     only: str | None = None,
 ) -> list[int]:
-    """Set a different random captioned painting on each connected display.
+    """Set a different random painting on each connected display, and write each
+    one's caption record for the overlay.
 
     With `throttle`, do nothing if the last change was more recent than
     `min_interval` seconds (default `config.min_interval`) — so this can be
@@ -385,8 +344,6 @@ def run(
     config = config or Config.load()
     rng = rng or random.Random()
     desktop = desktop or detect(os.environ)
-    if config.caption_mode not in CAPTION_MODES:
-        raise ValueError(f"unknown caption_mode: {config.caption_mode!r} (use {CAPTION_MODES})")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     with _single_instance(config.lock) as acquired:
@@ -399,14 +356,6 @@ def run(
         if throttle and cache.fresh(config.stamp, interval):
             return []
 
-        # "text" burns the caption with the system font; "interactive" composes bare
-        # and writes the caption + Wikipedia link for the overlay, so it needs no font.
-        burn = config.caption_mode == "text"
-        if burn:
-            font, sys_size = desktop.font()
-            point_size = config.font_size if config.font_size is not None else sys_size
-        else:
-            font, point_size = None, 0
         ids = painting_ids(config)
 
         displays = desktop.outputs()
@@ -418,19 +367,17 @@ def run(
         shown: list[int] = []
         for output in displays:
             image_path = config.output_image(output.name)
-            rendered = _render(
-                config, rng, runner, ids, shown, image_path,
-                output.width, output.height, output.scale, font, point_size, burn,
+            qid, painting = _render(
+                config, rng, runner, ids, shown, image_path, output.width, output.height
             )
-            shown.append(rendered.qid)
+            shown.append(qid)
             runner(desktop.wallpaper(output.name, image_path), check=True)
-            if not burn:
-                # everything the overlay needs to draw the caption, open the article,
-                # and — if you click the star — record it without another lookup.
-                cache.save_json(
-                    config.caption_file(output.name),
-                    selection.record(f"Q{rendered.qid}", rendered.painting, rendered.url),
-                )
+            # everything the overlay needs to draw the caption, open the article,
+            # and — if you click the star — record it without another lookup.
+            url = _wiki_url(config, qid, painting["creator_qid"])
+            cache.save_json(
+                config.caption_file(output.name), selection.record(f"Q{qid}", painting, url)
+            )
 
         config.stamp.touch()
         return shown
@@ -440,27 +387,18 @@ def preview(
     config: Config | None = None,
     rng: random.Random | None = None,
     runner: Callable[..., object] = subprocess.run,
-    desktop: Desktop | None = None,
 ) -> Path:
-    """Generate one random captioned painting and open it, changing nothing else.
+    """Generate one random painting and open it, changing nothing else.
 
     The wallpaper is left untouched — this just writes a preview image and hands
     it to the system image viewer.
     """
     config = config or Config.load()
     rng = rng or random.Random()
-    desktop = desktop or detect(os.environ)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Preview is a single self-contained image, so it always burns the caption
-    # in (the overlay only applies to the live wallpaper), regardless of mode.
-    font, sys_size = desktop.font()
-    point_size = config.font_size if config.font_size is not None else sys_size
     ids = painting_ids(config)
-    _render(
-        config, rng, runner, ids, [], config.preview_image,
-        PREVIEW_WIDTH, PREVIEW_HEIGHT, 1.0, font, point_size, True,
-    )
+    _render(config, rng, runner, ids, [], config.preview_image, PREVIEW_WIDTH, PREVIEW_HEIGHT)
     runner(commands.open_command(config.preview_image), check=True)
 
     return config.preview_image

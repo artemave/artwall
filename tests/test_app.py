@@ -9,7 +9,7 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
-from artwall import app, commands, wikidata
+from artwall import app, commands, selection, wikidata
 from artwall.config import Config
 from artwall.desktop import Desktop, Output
 from tests.server import serve
@@ -174,11 +174,9 @@ def wikidata_router(
     return router
 
 
-def config_for(server, cache_dir, caption_mode="text"):
-    # default "text" so the burn-the-caption assertions below stay exercised;
-    # interactive-mode tests pass caption_mode="interactive" explicitly. catalogue_dir
-    # points at an empty temp path so tests fetch from the loopback server, not the
-    # shipped bundle (the bundle-seed path is exercised by its own test).
+def config_for(server, cache_dir):
+    # catalogue_dir points at an empty temp path so tests fetch from the loopback
+    # server, not the shipped bundle (the bundle-seed path is exercised by its own test).
     return Config(
         cache_dir=cache_dir,
         catalogue_dir=cache_dir / "no-bundle",
@@ -189,18 +187,20 @@ def config_for(server, cache_dir, caption_mode="text"):
         # not the loopback server: nothing fetches it, it only has to end up in the
         # record as the article link for a painting with no Wikidata item
         commons_file_url="https://commons.example/wiki/",
-        caption_mode=caption_mode,
     )
 
 
-def fake_desktop(*names, scale=1.0):
-    """A real Desktop with fixed displays (each 1920x1080) and a fixed font, that
-    sets wallpapers the Sway way — no compositor needed."""
+def fake_desktop(*names):
+    """A real Desktop with fixed displays (each 1920x1080) that sets wallpapers
+    the Sway way — no compositor needed."""
     return Desktop(
-        lambda: [Output(name, 1920, 1080, scale) for name in names],
-        lambda: ("/fonts/Test.ttf", 11),
+        lambda: [Output(name, 1920, 1080) for name in names],
         commands.wallpaper_command,
     )
+
+
+def caption_record(cache_dir, output="DP-1"):
+    return json.loads((cache_dir / f"caption-{output}.json").read_text())
 
 
 class RunTests(unittest.TestCase):
@@ -230,10 +230,6 @@ class RunTests(unittest.TestCase):
         compose_argv = compose_call[0]
         self.assertEqual(compose_argv[0], "magick")
         self.assertIn("1920x1080!", compose_argv)  # gradient canvas at the display's size
-        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
-        self.assertIn(f"Painting {qid}", caption_arg)
-        self.assertEqual(compose_argv[compose_argv.index("-font") + 1], "/fonts/Test.ttf")
-        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "15")  # 11pt @ scale 1
         self.assertEqual(compose_call[1], True)  # check=True: a failed compose fails the run
         self.assertEqual(
             wallpaper_call,
@@ -330,9 +326,7 @@ class RunTests(unittest.TestCase):
                 desktop=fake_desktop("DP-1"),
             )
 
-        compose_argv = runner.calls[0][0]
-        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
-        self.assertIn("Unknown artist", caption_arg)  # no creator -> caption default
+        self.assertIn("Unknown artist", selection.caption(caption_record(self.cache_dir)))
 
     def test_an_artist_named_only_in_mul_is_still_credited(self):
         """A creator whose name is filed under `mul` and no real language is named,
@@ -349,10 +343,7 @@ class RunTests(unittest.TestCase):
                 desktop=fake_desktop("DP-1"),
             )
 
-        compose_argv = runner.calls[0][0]
-        caption_arg = compose_argv[compose_argv.index("-annotate") + 2]
-        self.assertIn("Tester", caption_arg)
-        self.assertNotIn("Unknown artist", caption_arg)
+        self.assertEqual(caption_record(self.cache_dir)["artist"], "Tester")
 
     def test_raises_when_no_painting_is_usable(self):
         router = wikidata_router([101, 102], missing={101, 102})
@@ -366,52 +357,20 @@ class RunTests(unittest.TestCase):
                     desktop=fake_desktop("DP-1"),
                 )
 
-    def test_caption_scales_with_a_hidpi_output(self):
-        router = wikidata_router([101])
-        with serve(router) as s:
-            router.base = s.base_url
-            runner = Recorder()
-            app.run(
-                config=config_for(s, self.cache_dir),
-                rng=random.Random(0),
-                runner=runner,
-                desktop=fake_desktop("eDP-1", scale=2.0),
-            )
-
-        compose_argv = runner.calls[0][0]
-        # system 11pt, doubled on a 2x display -> magick pointsize 29.
-        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "29")
-
-    def test_font_size_config_overrides_the_system_size(self):
-        router = wikidata_router([101])
-        with serve(router) as s:
-            router.base = s.base_url
-            cfg = config_for(s, self.cache_dir)
-            cfg.font_size = 20  # explicit override beats the system size
-            runner = Recorder()
-            app.run(cfg, random.Random(0), runner, fake_desktop("DP-1"))
-
-        compose_argv = runner.calls[0][0]
-        # 20pt at 1x -> magick pointsize 27, regardless of the system's 11pt.
-        self.assertEqual(compose_argv[compose_argv.index("-pointsize") + 1], "27")
-
-    def test_interactive_mode_skips_burn_and_writes_caption_file(self):
+    def test_writes_the_caption_record_for_the_overlay(self):
         router = wikidata_router([101])
         with serve(router) as s:
             router.base = s.base_url
             runner = Recorder()
             shown = app.run(
-                config=config_for(s, self.cache_dir, caption_mode="interactive"),
+                config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
                 desktop=fake_desktop("DP-1"),
             )
 
         qid = shown[0]
-        compose_argv = runner.calls[0][0]
-        self.assertNotIn("-annotate", compose_argv)  # nothing burned into the wallpaper
-        self.assertIn("-composite", compose_argv)  # painting still composed
-        data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
+        data = caption_record(self.cache_dir)
         self.assertEqual(data["key"], f"Q{qid}")
         self.assertEqual(data["title"], f"Painting {qid}")
         self.assertEqual(data["artist"], "Tester")
@@ -419,7 +378,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(data["image"], f"Q{qid}.jpg")  # what the star archiver fetches
         self.assertEqual(data["url"], f"https://en.wikipedia.org/wiki/Painting_{qid}")
 
-    def test_interactive_mode_uses_artist_article_when_painting_has_none(self):
+    def test_links_the_artist_article_when_the_painting_has_none(self):
         # painting has no article, but its artist does -> link to the artist
         router = wikidata_router(
             [101], no_article={101}, artist_article="https://en.wikipedia.org/wiki/Jan_Asselijn"
@@ -427,7 +386,7 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             app.run(
-                config=config_for(s, self.cache_dir, caption_mode="interactive"),
+                config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
                 desktop=fake_desktop("DP-1"),
@@ -436,13 +395,13 @@ class RunTests(unittest.TestCase):
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
         self.assertEqual(data["url"], "https://en.wikipedia.org/wiki/Jan_Asselijn")
 
-    def test_interactive_mode_falls_back_to_wikidata_page_when_neither_has_an_article(self):
+    def test_falls_back_to_the_wikidata_page_when_neither_has_an_article(self):
         # neither the painting nor its (here, absent) artist has an article
         router = wikidata_router([101], no_article={101}, anonymous={101})
         with serve(router) as s:
             router.base = s.base_url
             app.run(
-                config=config_for(s, self.cache_dir, caption_mode="interactive"),
+                config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
                 desktop=fake_desktop("DP-1"),
@@ -483,11 +442,6 @@ class RunTests(unittest.TestCase):
                     only="NOPE-1",
                 )
 
-    def test_unknown_caption_mode_fails_loudly(self):
-        cfg = Config(cache_dir=self.cache_dir, caption_mode="bogus")
-        with self.assertRaises(ValueError):
-            app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))
-
 
 class PreviewTests(unittest.TestCase):
     def setUp(self):
@@ -502,7 +456,6 @@ class PreviewTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                desktop=fake_desktop(),
             )
 
         self.assertEqual(path, self.cache_dir / "preview.jpg")
@@ -532,13 +485,6 @@ class SearchEntities(unittest.TestCase):
             rows = app.search_entities("impressionism", cfg)
 
         self.assertEqual(rows, [("Q40415", "Impressionism", "art movement")])
-
-
-class FontTests(unittest.TestCase):
-    def test_scaled_pointsize_is_scale_aware(self):
-        # 11pt at 96 dpi = ~14.67px on a 1x display, doubled on a 2x display.
-        self.assertEqual(app.scaled_pointsize(11, 1.0), 15)
-        self.assertEqual(app.scaled_pointsize(11, 2.0), 29)
 
 
 class ThrottleTests(unittest.TestCase):
@@ -752,7 +698,7 @@ class ResolveLink(unittest.TestCase):
         router = wikidata_router([101])
         with serve(router) as s:
             router.base = s.base_url
-            cfg = config_for(s, self.cache_dir, caption_mode="interactive")
+            cfg = config_for(s, self.cache_dir)
             app.run(
                 config=cfg,
                 rng=random.Random(0),

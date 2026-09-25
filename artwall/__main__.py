@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--preview",
         action="store_true",
-        help="Generate a captioned painting and open it with xdg-open, "
+        help="Generate a random painting and open it with xdg-open, "
         "without changing the wallpaper.",
     )
     parser.add_argument(
@@ -43,14 +43,14 @@ def main(argv: list[str] | None = None) -> None:
         "--output",
         metavar="NAME",
         help="Re-roll only the display with this output name, instead of every "
-        "connected display. Used by the interactive overlay's refresh button.",
+        "connected display. Used by the overlay's refresh button.",
     )
     parser.add_argument(
         "--star",
         metavar="NAME",
         help="Star the painting currently on this output — archiving the image "
         "alongside the gallery — or unstar it if it's already there. Used by the "
-        "interactive overlay's star button.",
+        "overlay's star button.",
     )
     args = parser.parse_args(argv)
 

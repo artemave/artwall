@@ -3,8 +3,8 @@
 Rotate your [Sway](https://swaywm.org/) or [KDE Plasma](https://kde.org/plasma-desktop/)
 wallpaper through random paintings from
 [Wikidata](https://www.wikidata.org/). The caption (artist, title, date) is shown
-by default as an interactive overlay with a clickable link to the painting's
-Wikipedia page — and a **star** button that keeps the ones you like.
+as an overlay with a clickable link to the painting's Wikipedia page — and a
+**star** button that keeps the ones you like.
 
 
 
@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/2f3c4325-da6f-43f9-b121-dbcc80158574
 
 - Python 3.11+
 - Sway, or KDE Plasma 6 in a Wayland session
-- PyGObject + gtk-layer-shell (GTK 3) - only for the default `interactive` caption overlay
+- PyGObject + gtk-layer-shell (GTK 3) - for the caption overlay
 
 Install the external tools (you already have your desktop and Python). PyGObject and GTK 3
 are usually present on a desktop install - the commands list them anyway, so the
@@ -46,7 +46,7 @@ exec /path/to/artwall/bin/artwall
 exec 'while :; do swaymsg -t subscribe -m "[\"window\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle; done; sleep 1; done'
 # re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
 exec 'while :; do swaymsg -t subscribe -m "[\"output\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done; sleep 1; done'
-# only for the default "interactive" caption mode - the interactive caption overlay:
+# the caption overlay:
 exec_always /path/to/artwall/bin/artwall-overlay
 ```
 
@@ -86,8 +86,7 @@ Name=artwall
 Exec=sh -c "while :; do /path/to/artwall/bin/artwall --throttle; sleep 60; done"
 ```
 
-`~/.config/autostart/artwall-overlay.desktop` (only for the default
-`"interactive"` caption mode):
+`~/.config/autostart/artwall-overlay.desktop`:
 
 ```ini
 [Desktop Entry]
@@ -107,7 +106,7 @@ To drive it by hand, from the checkout:
 
 ```bash
 ./bin/artwall              # set the wallpaper once
-./bin/artwall --preview    # open a captioned painting without changing the wallpaper
+./bin/artwall --preview    # open a random painting without changing the wallpaper
 ./bin/artwall --find monet # look up Wikidata QIDs for the config (see below)
 ```
 
@@ -117,7 +116,7 @@ State lives under `~/.cache/artwall/`; deleting it is a safe full reset. Your
 
 ## Starring paintings
 
-In the default `interactive` caption mode, each caption has a **★ button**.
+Each caption has a **★ button**.
 Click it and the painting is added to your gallery. The **gallery button** beside
 it opens the collection.
 
@@ -304,11 +303,10 @@ genres = ["Q191163"]       # landscape art
 artists = ["Q296"]         # Claude Monet
 collections = ["Q190804"]  # override the default set (or [] for all ~400k paintings)
 language = "en"            # caption / label language
-font_size = 11             # caption point size; omit to use the system font size
+font_size = 11             # caption point size; omit to use the desktop's UI font size
 caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
 caption_pad_x = 24         # caption inset from the side edge, in pixels
 caption_pad_y = 64         # caption inset from the top/bottom edge (or panel), in pixels
-caption_mode = "interactive"  # "interactive" = overlay; "text" = burned into the wallpaper
 stars_image_width = 2560   # width to archive a starred painting at
 min_interval = 1800        # --throttle interval, in seconds
 ```
@@ -344,28 +342,17 @@ right when you log in. (If you change `collections`, that new set is fetched on
 first use, per the note above.) Maintainers regenerate the shipped catalogue with
 `make catalogue` when the default set changes.
 
-### Caption modes
+### The caption overlay
 
-`caption_mode` chooses how the caption is shown:
-
-- **`interactive`** (default) - an **interactive overlay**: a small, persistent
-  widget (`bin/artwall-overlay`, launched with your session) that shows the
-  caption as a clickable link to the painting's Wikipedia article (falling back to
-  its Wikidata page), followed by a **★ button** that adds the painting to your
-  [gallery](#starring-paintings), a **gallery button** that opens the whole
-  collection, and a **refresh button** that re-rolls the
-  wallpaper on just that display; nothing is burned into the wallpaper. Because
-  it's a Wayland layer-shell surface sitting *just above the wallpaper*, it's
-  visible and clickable wherever the desktop is exposed. It needs PyGObject +
-  gtk-layer-shell, and it must be running - add the `exec` line from
-  [Usage](#usage). It updates automatically on each rotation.
-- **`text`** - the caption is **burned into the wallpaper** in the chosen corner
-  using the system font (scaled per display). No overlay, no extra dependencies,
-  nothing to launch - but not clickable, and with nothing to click there's no way
-  to star a painting.
-
-`--preview` always burns the caption in, regardless of mode, since it's a single
-self-contained image.
+The caption is a small, persistent widget (`bin/artwall-overlay`, launched with
+your session) that shows it as a clickable link to the painting's Wikipedia
+article (falling back to its Wikidata page), followed by a **★ button** that adds
+the painting to your [gallery](#starring-paintings), a **gallery button** that
+opens the whole collection, and a **refresh button** that re-rolls the wallpaper
+on just that display. Nothing is drawn into the wallpaper itself. Because it's a
+Wayland layer-shell surface sitting *just above the wallpaper*, it's visible and
+clickable wherever the desktop is exposed. It updates automatically on each
+rotation.
 
 ### Choosing filters
 

@@ -88,16 +88,6 @@ class FontTests(unittest.TestCase):
     def test_parse_font_name_splits_family_and_size(self):
         self.assertEqual(desktop.parse_font_name("Adwaita Sans 11"), ("Adwaita Sans", 11))
 
-    def test_parse_kde_font_reads_family_and_size_from_a_qfont(self):
-        self.assertEqual(
-            desktop.parse_kde_font("Noto Sans,12,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0"),
-            ("Noto Sans", 12),
-        )
-
-    def test_parse_kde_font_rounds_a_fractional_size(self):
-        self.assertEqual(desktop.parse_kde_font("Inter,10.5,-1,5,50,0,0,0,0,0"), ("Inter", 10))
-        self.assertEqual(desktop.parse_kde_font("Inter,11.5,-1,5,50,0,0,0,0,0"), ("Inter", 12))
-
 
 class Detect(unittest.TestCase):
     def test_sway(self):

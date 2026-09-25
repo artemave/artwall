@@ -1,4 +1,4 @@
-"""Interactive caption overlay for `caption_mode = "interactive"`.
+"""The caption overlay.
 
 A small, persistent GTK layer-shell widget — launched once with the desktop session —
 that shows each display's current painting caption as a clickable link (it opens
@@ -102,8 +102,8 @@ def monitor_at(display: Gdk.Display, x: int, y: int) -> Gdk.Monitor | None:
 
 
 def font_description(config: Config) -> str:
-    """A Pango font string matching the burned-in caption: system family, sized
-    from `config.font_size` (falling back to the system size)."""
+    """A Pango font string: the system family, sized from `config.font_size`
+    (falling back to the system size)."""
     settings = Gtk.Settings.get_default()
     assert settings is not None  # there is always a default while GTK is running
     family, system_size = parse_font_name(settings.get_property("gtk-font-name"))
@@ -315,7 +315,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     flags exist to be *negated* (`--no-serve-stars`, `--no-publish-stars`)."""
     parser = argparse.ArgumentParser(
         prog="artwall.overlay",
-        description='Interactive caption overlay for caption_mode = "interactive".',
+        description="artwall's caption overlay.",
     )
     parser.add_argument(
         "--serve-stars",

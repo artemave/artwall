@@ -1,5 +1,5 @@
-"""The compositor-specific edges: which displays exist, the UI font, and how a
-display's wallpaper is set. Everything else is desktop-agnostic."""
+"""The compositor-specific edges: which displays exist, and how a display's
+wallpaper is set. Everything else is desktop-agnostic."""
 from __future__ import annotations
 
 import json
@@ -28,7 +28,6 @@ class Output(NamedTuple):
 
 class Desktop(NamedTuple):
     outputs: Callable[[], list[Output]]
-    font: Callable[[], tuple[str, int]]
     wallpaper: Callable[[str, Path], list[str]]
 
 
@@ -64,13 +63,6 @@ def parse_font_name(name: str) -> tuple[str, int]:
     return family, int(size)
 
 
-def parse_kde_font(qfont: str) -> tuple[str, int]:
-    """(family, point size) from a KDE font setting — a serialised QFont like
-    "Noto Sans,10,-1,5,400,…", whose size may be fractional ("10.5")."""
-    family, size, *_ = qfont.split(",")
-    return family, round(float(size))
-
-
 def detect(environ: Mapping[str, str]) -> Desktop:
     if "SWAYSOCK" in environ:
         return SWAY
@@ -83,27 +75,12 @@ def _read(argv: list[str]) -> str:  # pragma: no cover - needs a live desktop
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def _font_file(family: str) -> str:  # pragma: no cover - reads the live fontconfig
-    return _read(["fc-match", "-f", "%{file}", family])
-
-
 def sway_outputs() -> list[Output]:  # pragma: no cover - needs a live Sway compositor
     return parse_outputs(_read(commands.outputs_command()))
 
 
-def gtk_font() -> tuple[str, int]:  # pragma: no cover - reads the live desktop
-    """The desktop's UI font as (file, point size), via gsettings + fontconfig."""
-    family, size = parse_font_name(_read(commands.gtk_font_command()).strip("'"))
-    return _font_file(family), size
-
-
 def plasma_outputs() -> list[Output]:  # pragma: no cover - needs a live KDE session
     return parse_kscreen_outputs(_read(commands.kscreen_outputs_command()))
-
-
-def kde_font() -> tuple[str, int]:  # pragma: no cover - reads the live desktop
-    family, size = parse_kde_font(_read(commands.kde_font_command()))
-    return _font_file(family), size
 
 
 def plasma_wallpaper(output: str, image_path: Path) -> list[str]:
@@ -112,5 +89,5 @@ def plasma_wallpaper(output: str, image_path: Path) -> list[str]:
     return commands.plasma_wallpaper_command(output, image_path, image_path.stat().st_mtime_ns)
 
 
-SWAY = Desktop(sway_outputs, gtk_font, commands.wallpaper_command)
-PLASMA = Desktop(plasma_outputs, kde_font, plasma_wallpaper)
+SWAY = Desktop(sway_outputs, commands.wallpaper_command)
+PLASMA = Desktop(plasma_outputs, plasma_wallpaper)

@@ -299,7 +299,7 @@ class StarTests(unittest.TestCase):
         self.data_dir = Path(tempfile.mkdtemp()) / "artwall"  # not yet created
 
     def config(self, server):
-        cfg = config_for(server, self.cache_dir, caption_mode="interactive")
+        cfg = config_for(server, self.cache_dir)
         cfg.data_dir = self.data_dir
         return cfg
 
