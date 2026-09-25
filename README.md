@@ -82,35 +82,15 @@ State lives under `~/.cache/artwall/`; deleting it is a safe full reset. Your
 
 ## Starring paintings
 
-Each caption has a **★ button**.
-Click it and the painting is added to your gallery. The **gallery button** beside
-it opens the collection.
+Click a caption's **★** to add the painting to your gallery; the **gallery
+button** next to it opens the gallery in your browser.
 
-artwall hosts that gallery itself, for as long as your session lasts, on a
-port the OS picks. There is nothing to start and nothing to remember to stop —
-it's just always there, behind the button.
+The gallery shows every painting you've kept, newest first. Click one to see it
+full size, or its title for the Wikipedia article. The ★ in its corner removes
+it (with an **Undo**).
 
-You get a masonry of every painting you've kept, newest first. Click a painting
-to open it full size; click its title to read the Wikipedia article in a new tab.
-Each has a **★ in its corner that removes it** from the gallery, and an **Undo**
-appears when you do.
-
-The heading reads "★ 12 starred paintings" by default. Set `owner = "Alex"` in
-the config and it reads "★ Alex starred 12 paintings" instead, on every
-rendering of the gallery — served, archived and published.
-
-That unstar button is why the gallery is a little loopback web server rather than
-a file the button opens — a page loaded from `file://` can't delete anything. It
-binds `127.0.0.1`, serves only your archived paintings, and needs no JavaScript.
-
-**There is exactly one gallery, structurally.** artwall is the only thing that
-serves one, and it already replaces any previous instance of itself on launch, so
-two servers answering two ports is not a state this can reach. (It used to be:
-there was a standalone `artwall --stars` you could run twice, and a PID file and a
-SIGTERM dance to stop you. Folding the gallery into the daemon deleted all of it.)
-
-With `--no-serve-stars` nothing listens on a port, and the gallery button opens
-the archived, read-only `stars.html` instead — the same page without the buttons.
+Set `owner = "Alex"` in the config to title it "★ Alex starred 12 paintings".
+With `--no-serve-stars` the button opens a read-only copy instead.
 
 ### Adding a painting you found yourself
 
