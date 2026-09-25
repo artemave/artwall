@@ -302,10 +302,8 @@ def _render(
 @contextlib.contextmanager
 def _single_instance(path: Path) -> Iterator[bool]:
     """Hold an exclusive, non-blocking lock for the duration of a run, so two
-    overlapping triggers can't both rotate. Window-focus and output events fire
-    independently — and a run's own `swaymsg output … bg` calls emit output
-    events — so without this they cascade into several wallpaper changes in a row.
-    Yields True to the one run that acquires the lock; yields False (run nothing)
+    overlapping triggers (the overlay's timer, a hotplug, a refresh click) can't
+    both rotate. Yields True to the one run that acquires the lock; yields False (run nothing)
     to any trigger that arrives while another run already holds it."""
     handle = path.open("w")
     try:
@@ -333,11 +331,11 @@ def run(
     one's caption record for the overlay.
 
     With `throttle`, do nothing if the last change was more recent than
-    `min_interval` seconds (default `config.min_interval`) — so this can be
-    triggered from frequent Sway events without thrashing the wallpaper. A small
-    `min_interval` suits output events (coalesce a hotplug's burst); the long
-    default suits window events. `only` restricts the change to the single output
-    of that name (the overlay's refresh button re-rolls just its own display).
+    `min_interval` seconds (default `config.min_interval`) — so the overlay can
+    ask every minute without thrashing the wallpaper. A small `min_interval` suits
+    a hotplug (coalesce several monitors into one run). `only` restricts the
+    change to the single output of that name (the overlay's refresh button
+    re-rolls just its own display).
     `rng`, `runner` and `desktop` are injected so tests can drive run()
     deterministically — no mocks, no real compositor.
     """

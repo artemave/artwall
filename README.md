@@ -35,58 +35,29 @@ sudo pacman -S imagemagick gtk-layer-shell python-gobject          # Arch
 Run it from this checkout - there's nothing to install. It detects which desktop
 it's running under (Sway via `SWAYSOCK`, Plasma via `XDG_CURRENT_DESKTOP`).
 
-### Sway
-
-Add to your Sway config
-(`~/.config/sway/config`), pointing at where you cloned it, to set a wallpaper at
-startup and re-roll on window focus (throttled to once every 30 min):
-
-```
-exec /path/to/artwall/bin/artwall
-exec 'while :; do swaymsg -t subscribe -m "[\"window\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle; done; sleep 1; done'
-# re-roll on monitor hotplug too, so a newly-connected screen gets a wallpaper:
-exec 'while :; do swaymsg -t subscribe -m "[\"output\"]" | while read -r _; do /path/to/artwall/bin/artwall --throttle --min-interval 5; done; sleep 1; done'
-# the caption overlay:
-exec_always /path/to/artwall/bin/artwall-overlay
-```
+The overlay (`bin/artwall-overlay`) is the one thing to launch with your
+session: it shows the captions, sets a painting at login, changes it every
+`Config.min_interval` (30 min by default), and re-rolls when a monitor is
+plugged in, so the new screen gets one too.
 
 > The overlay also hosts your [gallery](#starring-paintings) and keeps the
 > [published copy](#publishing-the-gallery) in step, both on by default. Opt out
 > with `--no-serve-stars` / `--no-publish-stars`.
 
-> The subscription lines must be **single-quoted as a whole**. Sway's config
-> parser splits an `exec` line on `;`, so an unquoted `… | while read …; do …; done`
-> is rejected at startup (`Unknown/invalid command 'do'`) and rotation silently
-> never starts. Wrapping the pipeline in `'…'` hands it to one `sh -c` intact (the
-> inner `"[\"window\"]"` is the event-type JSON with its quotes escaped). The
-> `while :; … sleep 1; done` supervisor resubscribes if `swaymsg` ever exits. Note
-> these are `exec`, not `exec_always`, so editing them needs a fresh Sway session
-> to take effect — `swaymsg reload` does not re-run `exec`.
+### Sway
 
-`--throttle` makes a frequent trigger a no-op until `Config.min_interval`
-seconds (default 30 min) have passed since the last change, so the wallpaper
-rotates while you're active and pauses while you're away. `--min-interval`
-overrides that interval: the output subscription uses a short 5 s so a single
-hotplug (which fires several output events) re-rolls just once, while window
-events keep the long interval. Any run sets a painting on *every* connected
-display, so a hotplug-triggered run also gives the new screen one.
+Add to your Sway config (`~/.config/sway/config`), pointing at where you cloned it:
+
+```
+exec_always /path/to/artwall/bin/artwall-overlay
+```
+
+`exec_always` restarts it on `swaymsg reload`; a new overlay replaces the old one.
 
 ### KDE Plasma
 
-Plasma has no event stream to hang rotation on, so a loop re-checks every minute
-and `--throttle` lets it change the painting once every `Config.min_interval`
-(30 min by default). Add two autostart entries, pointing at where you cloned it:
-
-`~/.config/autostart/artwall.desktop`
-
-```ini
-[Desktop Entry]
-Type=Application
-Name=artwall
-Exec=sh -c "while :; do /path/to/artwall/bin/artwall --throttle; sleep 60; done"
-```
-
-`~/.config/autostart/artwall-overlay.desktop`:
+Add an autostart entry, `~/.config/autostart/artwall-overlay.desktop`, pointing
+at where you cloned it:
 
 ```ini
 [Desktop Entry]
@@ -94,11 +65,6 @@ Type=Application
 Name=artwall overlay
 Exec=/path/to/artwall/bin/artwall-overlay
 ```
-
-Unlike on Sway, the painting changes on the clock whether or not you're at the
-desk, and a newly-connected screen shows Plasma's own wallpaper until the next
-change (or until you run `./bin/artwall`). Plasma remembers the last painting
-across logins.
 
 ### By hand
 
@@ -308,7 +274,7 @@ caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-r
 caption_pad_x = 24         # caption inset from the side edge, in pixels
 caption_pad_y = 64         # caption inset from the top/bottom edge (or panel), in pixels
 stars_image_width = 2560   # width to archive a starred painting at
-min_interval = 1800        # --throttle interval, in seconds
+min_interval = 1800        # how often the painting changes, in seconds
 ```
 
 Within a knob the values are OR'd (`Monet or Van Gogh`); across knobs they're

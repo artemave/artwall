@@ -45,7 +45,7 @@ COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php"
 COMMONS_FILE_URL = "https://commons.wikimedia.org/wiki/"
 IDS_TTL = 30 * 24 * 60 * 60  # the painting catalogue rarely changes; refetch monthly
 
-# Throttle for event-driven runs: with --throttle, a run is a no-op if the last
+# How often the wallpaper changes: with --throttle, a run is a no-op if the last
 # change happened fewer than this many seconds ago.
 MIN_INTERVAL = 30 * 60
 
@@ -248,7 +248,5 @@ class Config:
 
     @property
     def lock(self) -> Path:
-        """Lock file serialising runs: window-focus and output events fire
-        independent triggers (and a run's own `swaymsg … bg` emits output events),
-        so without a lock they overlap and rotate several times in a row."""
+        """Lock file serialising runs, so overlapping triggers rotate only once."""
         return self.cache_dir / "lock"

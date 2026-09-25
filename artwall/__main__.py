@@ -15,17 +15,15 @@ def main(argv: list[str] | None = None) -> None:
         "--throttle",
         action="store_true",
         help="Skip the change if the previous one happened less than the configured "
-        "interval ago (Config.min_interval, or --min-interval). Use this when triggering "
-        "frequently (Sway window events, or a timer loop on Plasma) so the wallpaper "
-        "rotates at most that often instead of on every trigger.",
+        "interval ago (Config.min_interval, or --min-interval). The overlay's rotation "
+        "timer runs artwall this way, so the wallpaper changes at most that often.",
     )
     parser.add_argument(
         "--min-interval",
         type=float,
         metavar="SECONDS",
-        help="Override Config.min_interval for --throttle. Use a small value (e.g. 5) on "
-        "the output-event subscription to coalesce the burst of events a single monitor "
-        "hotplug fires, while window events keep the long interval.",
+        help="Override Config.min_interval for --throttle. The overlay uses a small value "
+        "(5) on monitor hotplug, so connecting several screens at once re-rolls just once.",
     )
     parser.add_argument(
         "--preview",

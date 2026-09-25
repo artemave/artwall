@@ -21,12 +21,12 @@ the rate-limited WDQS. `collections = []` draws from *all* ~400k paintings. A TO
 file at `~/.config/artwall/config.toml` narrows it via a date window + QID filters
 (`movements`/`genres`/`artists`/`collections`) and sets
 `language`/`font_size`. It's a **oneshot** — sets the
-wallpaper once and exits. On Sway, rotation is driven by
-Sway events, not a daemon: the Sway config subscribes to window-focus events and
-runs artwall on each, with `--throttle` (using `Config.min_interval`) limiting it
-to ~every 30 min. Launched as a child of Sway, it inherits `SWAYSOCK` — no
-systemd, no env import. Plasma has no such event stream, so there an autostart
-loop runs `--throttle` every minute. The overlay draws the caption in GTK's UI
+wallpaper once and exits. Rotation is driven by the overlay, which is the one
+process launched with the session: it runs `artwall --throttle` at startup and
+every minute (`--throttle` turns all but one run per `Config.min_interval` into a
+no-op), and `--throttle --min-interval 5` on monitor hotplug. Its children
+inherit the session's environment (`SWAYSOCK` on Sway) — no systemd, no env
+import. The overlay draws the caption in GTK's UI
 font; `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
 tools (`swaymsg`, `kscreen-doctor`, `gdbus`, `magick`) are fine since we already
@@ -45,8 +45,8 @@ make catalogue                          # regenerate the shipped first-run catal
 make check                              # all checks: lint + typecheck + 100%-coverage-gated tests
 make lint / make typecheck / make test / make coverage  # individual targets (configs: ruff.toml, mypy.ini, .coveragerc)
 python3 -m artwall                       # set the wallpaper once (hits network + swaymsg + magick)
-python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (event throttle)
-python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (coalesce a hotplug's output-event burst)
+python3 -m artwall --throttle            # set once, but no-op if changed < Config.min_interval ago (the overlay's timer)
+python3 -m artwall --throttle --min-interval 5  # throttle with a 5s window (the overlay's hotplug re-roll)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall --output DP-1          # re-roll only one display (the overlay's refresh button)
 python3 -m artwall --star DP-1            # star/unstar that display's painting (the overlay's ★ button)
@@ -310,9 +310,16 @@ it can be tested without network or `swaymsg`.
   `gallery_url()`) and a refresh button that re-rolls that
   display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
   monitor model, not the Sway connector name) and reloaded via a `Gio.FileMonitor`
-  on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Both buttons
-  go through `_spawn()`, which `Popen`s `python3 -m artwall …` and polls it on a
-  `GLib.timeout`: starring downloads a full-size image, and doing that inline would
+  on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Every
+  child goes through `artwall()`, which `Popen`s `python3 -m artwall …` and reaps
+  it from a `GLib.timeout`.
+  **It's the daemon, so it drives rotation.** `main()` runs `artwall --throttle`
+  once at startup and every `ROTATION_CHECK_SECONDS` (60) after, and
+  `--throttle --min-interval 5` on `monitor-added` — a hotplug re-rolls every
+  display, which is what gives the new screen a painting, and the short interval
+  folds a dock's several monitors into one run. The throttle stays in tested
+  `run()` rather than here, since this module isn't covered. Both buttons go
+  through `_spawn()`, which disables the button until its child exits: starring downloads a full-size image, and doing that inline would
   freeze the widget. Nothing rewrites the caption file on a star, so `_toggle_star`
   refreshes its own icon from `stars.json` once the child exits.
   **It's the daemon, so it owns the gallery's lifetime.** `--serve-stars` binds
@@ -336,7 +343,7 @@ it can be tested without network or `swaymsg`.
   via `PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3` in `make install-dev`).
 
 Flow in `run()`: if `throttle` and `config.stamp` was touched more recently than
-`config.min_interval`, return early (the event-driven throttle). Otherwise:
+`config.min_interval`, return early (the rotation throttle). Otherwise:
 fetch/cache the catalogue (`painting_ids()`: a fresh per-filter-set cache wins;
 else on a true first run, seed from the shipped `bundled_ids_file()` if present —
 the default filters ship one, so no WDQS hit; else one SPARQL query → all matching
@@ -389,35 +396,24 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 ## Deployment notes
 
-On KDE Plasma the same two launchers run from `~/.config/autostart/*.desktop`
-entries instead (README has them): a `sh -c "while :; do …/bin/artwall
---throttle; sleep 60; done"` loop, and `bin/artwall-overlay`. There is no
-hotplug trigger — a new screen waits for the next rotation. The rest of this
-section describes Sway.
-
-No installer and no systemd. The user adds `exec` lines to their Sway config: one
-to set a wallpaper at startup; one subscribing to window events that runs artwall
-per event with `--throttle`; one subscribing to output events with `--throttle
---min-interval 5` so a monitor hotplug re-rolls (the short interval coalesces the
-event burst a single hotplug fires — any run sets every connected display, so the
-new screen gets a wallpaper); and `bin/artwall-overlay`
-for the caption overlay daemon (which itself rebuilds its surfaces on monitor
-hotplug via `Gdk.Display` `monitor-added`/`monitor-removed`, and re-rolls a single
-display with `python3 -m artwall --output <name>` from its refresh button — the
-overlay inherits the launcher's `PYTHONPATH`, so a bare `python3 -m artwall`
-resolves the package). `bin/artwall`
+No installer and no systemd. The user launches one thing with the session,
+`bin/artwall-overlay`: an `exec_always` line in the Sway config, or a
+`~/.config/autostart/*.desktop` entry on Plasma (README has both). The overlay
+does the rest — it rebuilds its surfaces on monitor hotplug via `Gdk.Display`
+`monitor-added`/`monitor-removed`, and runs every `python3 -m artwall …` child
+(rotation, hotplug, refresh, star); the children inherit the launcher's
+`PYTHONPATH`, so a bare `python3 -m artwall` resolves the package. `bin/artwall`
 and `bin/artwall-overlay` are small shell launchers that set `PYTHONPATH` to the
 repo and exec `python3 -m artwall "$@"` / `python3 -m artwall.overlay`. A failed
-run prints to Sway's stderr and is
-skipped; it doesn't touch the stamp, so the next event retries. Because the
-process is a child of Sway it inherits `SWAYSOCK`, so `swaymsg` works with no
-environment import (`swaymsg` talks to the IPC socket, it does not need
-`WAYLAND_DISPLAY`). Nothing is pip-installed, so the checkout must stay put — the
-`exec` line points at it.
+run prints to the overlay's stderr and is skipped; it doesn't touch the stamp, so
+the next minute's run retries. On Sway the overlay is a child of Sway, so it and
+its children inherit `SWAYSOCK` and `swaymsg` works with no environment import
+(`swaymsg` talks to the IPC socket, it does not need `WAYLAND_DISPLAY`). Nothing
+is pip-installed, so the checkout must stay put — the launch line points at it.
 
-Rotation itself is event-driven and self-throttled via `config.stamp`'s mtime —
-the oneshot never lingers. The one persistent process of ours is the
-`artwall.overlay` daemon, beside the stock `swaymsg -t subscribe` pipes. The
+Rotation is self-throttled via `config.stamp`'s mtime — each oneshot run exits
+straight away. The one persistent process of ours is the `artwall.overlay`
+daemon. The
 overlay also runs the gallery's loopback HTTP server on a background thread for
 its own lifetime, and publishes on another — both on by default, opt out with
 `--no-serve-stars` / `--no-publish-stars` (`bin/artwall-overlay` passes `"$@"`

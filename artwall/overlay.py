@@ -55,6 +55,15 @@ CORNER_EDGES = {
     "bottom-right": (Layer.Edge.BOTTOM, Layer.Edge.RIGHT),
 }
 
+# How often to ask artwall for a new painting. `--throttle` turns all but one
+# call per `Config.min_interval` into a no-op, so this only bounds how late a
+# rotation can be — after a suspend, say.
+ROTATION_CHECK_SECONDS = 60
+
+# A hotplug re-rolls every display, so the new one gets a painting; the short
+# throttle folds a dock's several monitors, each its own `monitor-added`, into one run.
+HOTPLUG_MIN_INTERVAL = "5"
+
 CSS = b"""
 window { background-color: transparent; }
 /* one translucent box shared by the caption text and the refresh button; the
@@ -80,6 +89,14 @@ def supersede_running_instances() -> None:
                 os.kill(int(entry), signal.SIGTERM)
             except OSError:
                 pass  # already gone
+
+
+def artwall(*args: str) -> subprocess.Popen[bytes]:
+    """Start `python3 -m artwall <args>` without blocking the GTK main loop, and
+    reap it once it exits."""
+    proc = subprocess.Popen([sys.executable, "-m", "artwall", *args])
+    GLib.timeout_add(250, lambda: proc.poll() is None)
+    return proc
 
 
 def output_scales(desktop: Desktop) -> dict[str, float]:
@@ -243,7 +260,7 @@ class Caption:
         and as progress feedback. `done` runs whether it succeeded or failed, so the
         button never stays stuck."""
         self._set_enabled(button, False)
-        proc = subprocess.Popen([sys.executable, "-m", "artwall", *args])
+        proc = artwall(*args)
 
         def poll() -> bool:
             if proc.poll() is None:
@@ -406,10 +423,19 @@ def main(argv: list[str] | None = None) -> None:
                 )
 
     rebuild()
-    # react to monitors being plugged/unplugged (artwall is triggered separately,
-    # by the Sway output-event subscription, to set the new display's wallpaper)
     display.connect("monitor-added", rebuild)
     display.connect("monitor-removed", rebuild)
+    display.connect(
+        "monitor-added",
+        lambda *_: artwall("--throttle", "--min-interval", HOTPLUG_MIN_INTERVAL),
+    )
+
+    def rotate() -> bool:
+        artwall("--throttle")
+        return True  # keep the timer
+
+    rotate()
+    GLib.timeout_add_seconds(ROTATION_CHECK_SECONDS, rotate)
 
     def on_change(
         _monitor: Gio.FileMonitor,
