@@ -205,6 +205,9 @@ class Caption:
         Layer.init_for_window(self.window)
         Layer.set_monitor(self.window, monitor)
         Layer.set_layer(self.window, Layer.Layer.BOTTOM)  # below windows, like wallpaper
+        # KWin types a layer surface by its namespace, and its Show Desktop hides every
+        # type but the shell's own — "dock" keeps the caption up under Meta+D.
+        Layer.set_namespace(self.window, "dock")
         Layer.set_keyboard_mode(self.window, Layer.KeyboardMode.NONE)
         vertical, horizontal = CORNER_EDGES[config.caption_corner]
         Layer.set_anchor(self.window, vertical, True)
