@@ -9,15 +9,15 @@ from .app import preview, run, search_entities
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="artwall",
-        description="Set a random Wikidata painting as the Sway wallpaper.",
+        description="Set a random Wikidata painting as the Sway or KDE Plasma wallpaper.",
     )
     parser.add_argument(
         "--throttle",
         action="store_true",
         help="Skip the change if the previous one happened less than the configured "
         "interval ago (Config.min_interval, or --min-interval). Use this when triggering "
-        "from frequent Sway events (e.g. window focus) so the wallpaper rotates at most "
-        "that often instead of on every event.",
+        "frequently (Sway window events, or a timer loop on Plasma) so the wallpaper "
+        "rotates at most that often instead of on every trigger.",
     )
     parser.add_argument(
         "--min-interval",
@@ -42,13 +42,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--output",
         metavar="NAME",
-        help="Re-roll only the display with this Sway output name, instead of every "
+        help="Re-roll only the display with this output name, instead of every "
         "connected display. Used by the interactive overlay's refresh button.",
     )
     parser.add_argument(
         "--star",
         metavar="NAME",
-        help="Star the painting currently on this Sway output — archiving the image "
+        help="Star the painting currently on this output — archiving the image "
         "alongside the gallery — or unstar it if it's already there. Used by the "
         "interactive overlay's star button.",
     )

@@ -22,9 +22,8 @@ from tests.test_app import (
     IMAGE_BYTES,
     Recorder,
     config_for,
-    fake_font,
+    fake_desktop,
     link_to,
-    outputs,
     wikidata_router,
 )
 
@@ -306,7 +305,7 @@ class StarTests(unittest.TestCase):
 
     def set_a_wallpaper(self, cfg):
         """Really run() so the caption file `star()` reads is the one run() writes."""
-        return app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)[0]
+        return app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))[0]
 
     def test_stars_the_current_painting_and_archives_its_image(self):
         router = wikidata_router([101])

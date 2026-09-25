@@ -1,6 +1,6 @@
 """Interactive caption overlay for `caption_mode = "interactive"`.
 
-A small, persistent GTK layer-shell widget — launched once from the Sway config —
+A small, persistent GTK layer-shell widget — launched once with the desktop session —
 that shows each display's current painting caption as a clickable link (it opens
 the Wikipedia article), followed by three buttons: a star that adds the painting
 to the gallery, a gallery button that opens the whole collection, and a refresh
@@ -34,7 +34,6 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import gi
 
@@ -45,8 +44,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from gi.repository import GtkLayerShell as Layer  # type: ignore[attr-defined]  # noqa: E402
 
 from . import selection, stars  # noqa: E402
-from .app import parse_font_name  # noqa: E402 - reuse the pure font parsing
 from .config import Config  # noqa: E402
+from .desktop import Desktop, detect, parse_font_name  # noqa: E402
 
 # config.caption_corner -> (vertical edge, horizontal edge) to anchor the surface.
 CORNER_EDGES = {
@@ -83,25 +82,12 @@ def supersede_running_instances() -> None:
                 pass  # already gone
 
 
-def sway_outputs_raw() -> list[dict[str, Any]]:
-    """The active Sway outputs (each a parsed `get_outputs` object)."""
-    raw = subprocess.run(
-        ["swaymsg", "-t", "get_outputs", "-r"], capture_output=True, text=True, check=True
-    ).stdout
-    return [o for o in json.loads(raw) if o["active"]]
-
-
-def sway_output_positions() -> dict[str, tuple[int, int]]:
-    """Active Sway outputs as name -> (x, y) logical origin, to match GTK monitors."""
-    return {o["name"]: (o["rect"]["x"], o["rect"]["y"]) for o in sway_outputs_raw()}
-
-
-def sway_output_scales() -> dict[str, float]:
-    """Active Sway outputs as name -> scale. Sway is authoritative and immediate;
-    GTK's per-monitor scale can still read 1 for a beat after a hotplug (Sway
-    applies the configured scale only once the output is added), so the margin is
-    recomputed from this rather than cached from an early GTK read."""
-    return {o["name"]: o["scale"] for o in sway_outputs_raw()}
+def output_scales(desktop: Desktop) -> dict[str, float]:
+    """Active outputs as name -> scale. The compositor is authoritative and
+    immediate; GTK's per-monitor scale can still read 1 for a beat after a hotplug
+    (Sway applies the configured scale only once the output is added), so the
+    margin is recomputed from this rather than cached from an early GTK read."""
+    return {o.name: o.scale for o in desktop.outputs()}
 
 
 def monitor_at(display: Gdk.Display, x: int, y: int) -> Gdk.Monitor | None:
@@ -131,6 +117,7 @@ class Caption:
     def __init__(
         self,
         config: Config,
+        desktop: Desktop,
         monitor: Gdk.Monitor,
         name: str,
         font: str,
@@ -139,6 +126,7 @@ class Caption:
     ) -> None:
         self.name = name
         self.config = config
+        self.desktop = desktop
         self.path = config.caption_file(name)
         self.font = font
         self.gallery_url = gallery_url
@@ -201,9 +189,6 @@ class Caption:
         Layer.set_monitor(self.window, monitor)
         Layer.set_layer(self.window, Layer.Layer.BOTTOM)  # below windows, like wallpaper
         Layer.set_keyboard_mode(self.window, Layer.KeyboardMode.NONE)
-        # ignore other surfaces' exclusive zones (e.g. a bar) so the margin is
-        # measured from the true screen edge, matching the burned-in caption.
-        Layer.set_exclusive_zone(self.window, -1)
         vertical, horizontal = CORNER_EDGES[config.caption_corner]
         Layer.set_anchor(self.window, vertical, True)
         Layer.set_anchor(self.window, horizontal, True)
@@ -304,12 +289,12 @@ class Caption:
         self.star_icon.set_pixel_size(self.icon_pixels)
 
     def reload(self) -> None:
-        """Recompute the margins from Sway's current scale, then re-read the caption
+        """Recompute the margins from the compositor's current scale, then re-read the caption
         file and show it (hide if it isn't there yet). Runs at build, on every
         rotation, and right after a hotplug — the output-event subscription reruns
         artwall, which rewrites the caption files the directory monitor watches — so
         a margin baked at a stale post-hotplug scale self-corrects on the next run."""
-        scale = sway_output_scales().get(self.name)
+        scale = output_scales(self.desktop).get(self.name)
         if scale:  # absent only if the output vanished mid-reload; keep the old margin
             self._apply_margins(scale)
         try:
@@ -381,6 +366,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     supersede_running_instances()  # last launch wins; never stack duplicates
     config = Config.load()
+    desktop = detect(os.environ)
 
     server: stars.GalleryServer | None = None
     if args.serve_stars:
@@ -412,11 +398,11 @@ def main(argv: list[str] | None = None) -> None:
             caption.window.destroy()
         captions.clear()
         url = gallery_url(config, server)
-        for name, (x, y) in sway_output_positions().items():
-            monitor = monitor_at(display, x, y)
+        for output in desktop.outputs():
+            monitor = monitor_at(display, output.x, output.y)
             if monitor is not None:
-                captions[name] = Caption(
-                    config, monitor, name, font, url, args.publish_stars
+                captions[output.name] = Caption(
+                    config, desktop, monitor, output.name, font, url, args.publish_stars
                 )
 
     rebuild()

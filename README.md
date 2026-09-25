@@ -1,6 +1,7 @@
 # artwall
 
-Rotate your [Sway](https://swaywm.org/) wallpaper through random paintings from
+Rotate your [Sway](https://swaywm.org/) or [KDE Plasma](https://kde.org/plasma-desktop/)
+wallpaper through random paintings from
 [Wikidata](https://www.wikidata.org/). The caption (artist, title, date) is shown
 by default as an interactive overlay with a clickable link to the painting's
 Wikipedia page — and a **star** button that keeps the ones you like.
@@ -16,10 +17,10 @@ https://github.com/user-attachments/assets/2f3c4325-da6f-43f9-b121-dbcc80158574
 ## Requirements
 
 - Python 3.11+
-- Sway
+- Sway, or KDE Plasma 6 in a Wayland session
 - PyGObject + gtk-layer-shell (GTK 3) - only for the default `interactive` caption overlay
 
-Install the external tools (you already have Sway and Python). PyGObject and GTK 3
+Install the external tools (you already have your desktop and Python). PyGObject and GTK 3
 are usually present on a desktop install - the commands list them anyway, so the
 ones you actually tend to be missing are **ImageMagick** and **gtk-layer-shell**:
 
@@ -31,7 +32,12 @@ sudo pacman -S imagemagick gtk-layer-shell python-gobject          # Arch
 
 ## Usage
 
-Run it from this checkout - there's nothing to install. Add to your Sway config
+Run it from this checkout - there's nothing to install. It detects which desktop
+it's running under (Sway via `SWAYSOCK`, Plasma via `XDG_CURRENT_DESKTOP`).
+
+### Sway
+
+Add to your Sway config
 (`~/.config/sway/config`), pointing at where you cloned it, to set a wallpaper at
 startup and re-roll on window focus (throttled to once every 30 min):
 
@@ -64,6 +70,38 @@ overrides that interval: the output subscription uses a short 5 s so a single
 hotplug (which fires several output events) re-rolls just once, while window
 events keep the long interval. Any run sets a painting on *every* connected
 display, so a hotplug-triggered run also gives the new screen one.
+
+### KDE Plasma
+
+Plasma has no event stream to hang rotation on, so a loop re-checks every minute
+and `--throttle` lets it change the painting once every `Config.min_interval`
+(30 min by default). Add two autostart entries, pointing at where you cloned it:
+
+`~/.config/autostart/artwall.desktop`
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=artwall
+Exec=sh -c "while :; do /path/to/artwall/bin/artwall --throttle; sleep 60; done"
+```
+
+`~/.config/autostart/artwall-overlay.desktop` (only for the default
+`"interactive"` caption mode):
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=artwall overlay
+Exec=/path/to/artwall/bin/artwall-overlay
+```
+
+Unlike on Sway, the painting changes on the clock whether or not you're at the
+desk, and a newly-connected screen shows Plasma's own wallpaper until the next
+change (or until you run `./bin/artwall`). Plasma remembers the last painting
+across logins.
+
+### By hand
 
 To drive it by hand, from the checkout:
 
@@ -269,7 +307,7 @@ language = "en"            # caption / label language
 font_size = 11             # caption point size; omit to use the system font size
 caption_corner = "bottom-right"  # top-left / top-right / bottom-left / bottom-right
 caption_pad_x = 24         # caption inset from the side edge, in pixels
-caption_pad_y = 64         # caption inset from the top/bottom edge, in pixels
+caption_pad_y = 64         # caption inset from the top/bottom edge (or panel), in pixels
 caption_mode = "interactive"  # "interactive" = overlay; "text" = burned into the wallpaper
 stars_image_width = 2560   # width to archive a starred painting at
 min_interval = 1800        # --throttle interval, in seconds
@@ -311,7 +349,7 @@ first use, per the note above.) Maintainers regenerate the shipped catalogue wit
 `caption_mode` chooses how the caption is shown:
 
 - **`interactive`** (default) - an **interactive overlay**: a small, persistent
-  widget (`bin/artwall-overlay`, launched from your Sway config) that shows the
+  widget (`bin/artwall-overlay`, launched with your session) that shows the
   caption as a clickable link to the painting's Wikipedia article (falling back to
   its Wikidata page), followed by a **★ button** that adds the painting to your
   [gallery](#starring-paintings), a **gallery button** that opens the whole
@@ -393,5 +431,5 @@ Logic is split out of the entry point so it stays testable: pure builders in
 `commands.py`, the HTTP client in `web.py`, orchestration in `app.py`. Tests
 exercise the HTTP layer against a real loopback `http.server` (a fake Wikidata),
 and drive `run()` with a seeded `random.Random` and a recording runner that
-captures the `swaymsg` argv instead of launching it. See `CLAUDE.md` for the
+captures the wallpaper argv instead of launching it. See `CLAUDE.md` for the
 full module breakdown.

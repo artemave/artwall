@@ -110,7 +110,8 @@ class Config:
     font_size: int | None = None
     # caption placement: which corner, and the inset from the screen edges in
     # pixels (absolute, so it sits the same fixed distance from the edge on every
-    # display). corner is one of top-left/top-right/bottom-left/bottom-right.
+    # display). The interactive overlay measures it from the edge of any panel or
+    # bar instead. corner is one of top-left/top-right/bottom-left/bottom-right.
     caption_corner: str = "bottom-right"
     caption_pad_x: int = 24
     caption_pad_y: int = 64

@@ -70,6 +70,43 @@ class Commands(unittest.TestCase):
             ["swaymsg", "-t", "get_outputs", "-r"],
         )
 
+    def test_gtk_font_command(self):
+        self.assertEqual(
+            commands.gtk_font_command(),
+            ["gsettings", "get", "org.gnome.desktop.interface", "font-name"],
+        )
+
+    def test_kscreen_outputs_command(self):
+        self.assertEqual(commands.kscreen_outputs_command(), ["kscreen-doctor", "-j"])
+
+    def test_kde_font_command_falls_back_to_plasmas_default_font(self):
+        argv = commands.kde_font_command()
+
+        self.assertEqual(argv[:5], ["kreadconfig6", "--group", "General", "--key", "font"])
+        self.assertEqual(argv[argv.index("--default") + 1], "Noto Sans,10")
+
+    def test_plasma_wallpaper_command_evaluates_a_desktop_script(self):
+        argv = commands.plasma_wallpaper_command("DP-1", Path("/tmp/current-DP-1.jpg"), 42)
+
+        self.assertEqual(
+            argv[:-1],
+            [
+                "gdbus", "call", "--session",
+                "--dest", "org.kde.plasmashell",
+                "--object-path", "/PlasmaShell",
+                "--method", "org.kde.PlasmaShell.evaluateScript",
+            ],
+        )
+        script = argv[-1]
+        self.assertIn('screenForConnector("DP-1")', script)
+        self.assertIn('d.writeConfig("Image", "file:///tmp/current-DP-1.jpg?v=42")', script)
+
+    def test_plasma_wallpaper_command_quotes_its_values_as_js_strings(self):
+        script = commands.plasma_wallpaper_command('a"b', Path("/tmp/x y.jpg"), 1)[-1]
+
+        self.assertIn(r'screenForConnector("a\"b")', script)
+        self.assertIn('"file:///tmp/x%20y.jpg?v=1"', script)
+
     def test_open_command(self):
         self.assertEqual(
             commands.open_command(Path("/tmp/preview.jpg")),

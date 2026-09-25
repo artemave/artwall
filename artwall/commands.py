@@ -1,10 +1,11 @@
 """Build the argv for the external programs we shell out to.
 
-Kept pure (argv in, list out) so the wiring is testable without running swaymsg
-or ImageMagick.
+Kept pure (argv in, list out) so the wiring is testable without running swaymsg,
+Plasma or ImageMagick.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # Map the user-facing corner names to ImageMagick gravities. A positive annotate
@@ -100,6 +101,48 @@ def wallpaper_command(output: str, image_path: Path) -> list[str]:
 
 def outputs_command() -> list[str]:
     return ["swaymsg", "-t", "get_outputs", "-r"]
+
+
+def gtk_font_command() -> list[str]:
+    return ["gsettings", "get", "org.gnome.desktop.interface", "font-name"]
+
+
+def kscreen_outputs_command() -> list[str]:
+    return ["kscreen-doctor", "-j"]
+
+
+def kde_font_command() -> list[str]:
+    # kdeglobals only stores the font once it's been changed from Plasma's default.
+    return ["kreadconfig6", "--group", "General", "--key", "font", "--default", "Noto Sans,10"]
+
+
+# Plasma's desktop scripting API. Desktops are keyed by screen index, not connector
+# name, hence the lookup; an unknown connector is -1, which would otherwise match
+# no desktop and set nothing.
+PLASMA_WALLPAPER_SCRIPT = """\
+const screen = screenForConnector(%(output)s);
+if (screen < 0) throw new Error("no Plasma screen for " + %(output)s);
+for (const d of desktops()) {
+  if (d.screen !== screen) continue;
+  d.wallpaperPlugin = "org.kde.image";
+  d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
+  d.writeConfig("Image", %(url)s);
+}
+"""
+
+
+def plasma_wallpaper_command(output: str, image_path: Path, version: int) -> list[str]:
+    script = PLASMA_WALLPAPER_SCRIPT % {
+        "output": json.dumps(output),
+        "url": json.dumps(f"{image_path.as_uri()}?v={version}"),
+    }
+    return [
+        "gdbus", "call", "--session",
+        "--dest", "org.kde.plasmashell",
+        "--object-path", "/PlasmaShell",
+        "--method", "org.kde.PlasmaShell.evaluateScript",
+        script,
+    ]
 
 
 def open_command(target: str | Path) -> list[str]:

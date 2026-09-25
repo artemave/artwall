@@ -9,8 +9,9 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
-from artwall import app, wikidata
+from artwall import app, commands, wikidata
 from artwall.config import Config
+from artwall.desktop import Desktop, Output
 from tests.server import serve
 
 IMAGE_BYTES = b"\xff\xd8\xff fake jpeg"
@@ -192,14 +193,14 @@ def config_for(server, cache_dir, caption_mode="text"):
     )
 
 
-def outputs(*names, scale=1.0):
-    """A real get_outputs provider returning fixed displays (each 1920x1080)."""
-    return lambda: [app.Output(name, 1920, 1080, scale) for name in names]
-
-
-def fake_font():
-    """A real get_font provider — a fixed (file, point size), no desktop needed."""
-    return ("/fonts/Test.ttf", 11)
+def fake_desktop(*names, scale=1.0):
+    """A real Desktop with fixed displays (each 1920x1080) and a fixed font, that
+    sets wallpapers the Sway way — no compositor needed."""
+    return Desktop(
+        lambda: [Output(name, 1920, 1080, scale) for name in names],
+        lambda: ("/fonts/Test.ttf", 11),
+        commands.wallpaper_command,
+    )
 
 
 class RunTests(unittest.TestCase):
@@ -215,8 +216,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         self.assertEqual(len(shown), 1)
@@ -249,8 +249,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1", "HDMI-A-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1", "HDMI-A-1"),
             )
 
         self.assertEqual(sorted(shown), [101, 102])  # two distinct paintings
@@ -265,9 +264,9 @@ class RunTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
-            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
+            app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))
             catalogue_hits = sum(1 for p in s.requests if p.startswith("/sparql"))
-            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
+            app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))
             catalogue_hits_after = sum(1 for p in s.requests if p.startswith("/sparql"))
 
         self.assertEqual(catalogue_hits, 1)
@@ -282,8 +281,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         self.assertEqual(shown, [102])  # the vanished 101 was skipped
@@ -299,8 +297,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         self.assertEqual(shown, [101])  # the too-small 102 was skipped
@@ -316,8 +313,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         self.assertEqual(shown, [101])
@@ -331,8 +327,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         compose_argv = runner.calls[0][0]
@@ -351,8 +346,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         compose_argv = runner.calls[0][0]
@@ -369,8 +363,7 @@ class RunTests(unittest.TestCase):
                     config=config_for(s, self.cache_dir),
                     rng=random.Random(0),
                     runner=Recorder(),
-                    get_outputs=outputs("DP-1"),
-                    get_font=fake_font,
+                    desktop=fake_desktop("DP-1"),
                 )
 
     def test_caption_scales_with_a_hidpi_output(self):
@@ -382,8 +375,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("eDP-1", scale=2.0),
-                get_font=fake_font,
+                desktop=fake_desktop("eDP-1", scale=2.0),
             )
 
         compose_argv = runner.calls[0][0]
@@ -397,7 +389,7 @@ class RunTests(unittest.TestCase):
             cfg = config_for(s, self.cache_dir)
             cfg.font_size = 20  # explicit override beats the system size
             runner = Recorder()
-            app.run(cfg, random.Random(0), runner, outputs("DP-1"), fake_font)
+            app.run(cfg, random.Random(0), runner, fake_desktop("DP-1"))
 
         compose_argv = runner.calls[0][0]
         # 20pt at 1x -> magick pointsize 27, regardless of the system's 11pt.
@@ -412,8 +404,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         qid = shown[0]
@@ -439,8 +430,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
@@ -455,8 +445,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir, caption_mode="interactive"),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
 
         data = json.loads((self.cache_dir / "caption-DP-1.json").read_text())
@@ -471,8 +460,7 @@ class RunTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1", "HDMI-A-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1", "HDMI-A-1"),
                 only="HDMI-A-1",
             )
 
@@ -491,15 +479,14 @@ class RunTests(unittest.TestCase):
                     config=config_for(s, self.cache_dir),
                     rng=random.Random(0),
                     runner=Recorder(),
-                    get_outputs=outputs("DP-1"),
-                    get_font=fake_font,
+                    desktop=fake_desktop("DP-1"),
                     only="NOPE-1",
                 )
 
     def test_unknown_caption_mode_fails_loudly(self):
         cfg = Config(cache_dir=self.cache_dir, caption_mode="bogus")
         with self.assertRaises(ValueError):
-            app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
+            app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))
 
 
 class PreviewTests(unittest.TestCase):
@@ -515,7 +502,7 @@ class PreviewTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_font=fake_font,
+                desktop=fake_desktop(),
             )
 
         self.assertEqual(path, self.cache_dir / "preview.jpg")
@@ -547,33 +534,7 @@ class SearchEntities(unittest.TestCase):
         self.assertEqual(rows, [("Q40415", "Impressionism", "art movement")])
 
 
-class ParseOutputs(unittest.TestCase):
-    def test_returns_active_outputs_with_size_and_scale(self):
-        raw = json.dumps(
-            [
-                {"name": "DP-1", "active": True, "scale": 1.0, "current_mode": {"width": 2560, "height": 1440}},  # noqa: E501
-                {"name": "eDP-1", "active": True, "scale": 2.0, "current_mode": {"width": 3840, "height": 2160}},  # noqa: E501
-            ]
-        )
-        self.assertEqual(
-            app.parse_outputs(raw),
-            [app.Output("DP-1", 2560, 1440, 1.0), app.Output("eDP-1", 3840, 2160, 2.0)],
-        )
-
-    def test_skips_inactive_outputs(self):
-        raw = json.dumps(
-            [
-                {"name": "DP-1", "active": True, "scale": 1.0, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
-                {"name": "DP-2", "active": False, "scale": 1.0, "current_mode": {"width": 1920, "height": 1080}},  # noqa: E501
-            ]
-        )
-        self.assertEqual(app.parse_outputs(raw), [app.Output("DP-1", 1920, 1080, 1.0)])
-
-
 class FontTests(unittest.TestCase):
-    def test_parse_font_name_splits_family_and_size(self):
-        self.assertEqual(app.parse_font_name("Adwaita Sans 11"), ("Adwaita Sans", 11))
-
     def test_scaled_pointsize_is_scale_aware(self):
         # 11pt at 96 dpi = ~14.67px on a 1x display, doubled on a 2x display.
         self.assertEqual(app.scaled_pointsize(11, 1.0), 15)
@@ -595,8 +556,7 @@ class ThrottleTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=runner,
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
                 throttle=True,
             )
 
@@ -616,8 +576,7 @@ class ThrottleTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
                 throttle=True,
             )
 
@@ -638,8 +597,7 @@ class ThrottleTests(unittest.TestCase):
                 config=config_for(s, self.cache_dir),  # default 30-min interval would skip
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
                 throttle=True,
                 min_interval=5,  # but the change was 10s ago > 5s, so it runs
             )
@@ -667,8 +625,7 @@ class LockTests(unittest.TestCase):
                     config=cfg,
                     rng=random.Random(0),
                     runner=runner,
-                    get_outputs=outputs("DP-1"),
-                    get_font=fake_font,
+                    desktop=fake_desktop("DP-1"),
                 )
 
         self.assertEqual(shown, [])  # the lock was held, so the trigger was dropped
@@ -681,8 +638,8 @@ class LockTests(unittest.TestCase):
         with serve(router) as s:
             router.base = s.base_url
             cfg = config_for(s, self.cache_dir)
-            first = app.run(cfg, random.Random(0), Recorder(), outputs("DP-1"), fake_font)
-            second = app.run(cfg, random.Random(1), Recorder(), outputs("DP-1"), fake_font)
+            first = app.run(cfg, random.Random(0), Recorder(), fake_desktop("DP-1"))
+            second = app.run(cfg, random.Random(1), Recorder(), fake_desktop("DP-1"))
 
         self.assertEqual(len(first), 1)
         self.assertEqual(len(second), 1)  # the second run wasn't blocked by a stale lock
@@ -800,8 +757,7 @@ class ResolveLink(unittest.TestCase):
                 config=cfg,
                 rng=random.Random(0),
                 runner=Recorder(),
-                get_outputs=outputs("DP-1"),
-                get_font=fake_font,
+                desktop=fake_desktop("DP-1"),
             )
             shown = json.loads(cfg.caption_file("DP-1").read_text())
             pasted = app.resolve_link(cfg, link_to(101))

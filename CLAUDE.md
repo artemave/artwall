@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A standard-library-only Python tool that sets a random painting from
 [Wikidata](https://www.wikidata.org/) (every `instance of: painting` that has an
-image — ~400k) as the **Sway** desktop wallpaper. The painting is composed (via
+image — ~400k) as the **Sway** or **KDE Plasma** (Wayland) desktop wallpaper. The painting is composed (via
 ImageMagick) onto a display-sized canvas so it's shown *whole* (no cropping); the
 letterbox margins are filled with a soft gradient sampled from the painting's own
 colours. The caption (artist/title/date) is shown one of two ways, set by
@@ -23,16 +23,18 @@ the rate-limited WDQS. `collections = []` draws from *all* ~400k paintings. A TO
 file at `~/.config/artwall/config.toml` narrows it via a date window + QID filters
 (`movements`/`genres`/`artists`/`collections`) and sets
 `language`/`font_size`/`caption_mode`. It's a **oneshot** — sets the
-wallpaper once and exits. Rotation is driven by
+wallpaper once and exits. On Sway, rotation is driven by
 Sway events, not a daemon: the Sway config subscribes to window-focus events and
 runs artwall on each, with `--throttle` (using `Config.min_interval`) limiting it
 to ~every 30 min. Launched as a child of Sway, it inherits `SWAYSOCK` — no
-systemd, no env import. The caption is drawn in the desktop's system font
-(`gsettings` for the name/size + `fc-match` to resolve the file) at a point size
+systemd, no env import. Plasma has no such event stream, so there an autostart
+loop runs `--throttle` every minute. The caption is drawn in the desktop's system
+font (`gsettings` on Sway, `kdeglobals` on Plasma, + `fc-match` to resolve the
+file) at a point size
 scaled per display, so it looks the same physical size on HiDPI screens;
 `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
-tools (`swaymsg`, `magick`, `gsettings`, `fc-match`) are fine since we already
+tools (`swaymsg`, `kscreen-doctor`, `gdbus`, `magick`, `gsettings`, `fc-match`) are fine since we already
 shell out. The one exception is `artwall/overlay.py` (the `"interactive"`-mode widget),
 which needs PyGObject + gtk-layer-shell — it's the lone GUI/daemon component and
 is quarantined there (omitted from coverage; typed against GTK3 PyGObject-stubs).
@@ -274,11 +276,25 @@ it can be tested without network or `swaymsg`.
 - `artwall/commands.py` — pure argv builders for `magick` (the gradient-canvas
   compose + optional caption; `text=None` composes the painting bare, for
   `"interactive"` mode — plus `thumbnail_command`, the published site's web-sized
-  copy), `swaymsg`, and the `git` commands `sync()`/`sync_pending()` run.
-- `artwall/app.py` — orchestration. `run(config, rng, runner, get_outputs,
-  get_font, throttle, only)` injects `rng`, `runner`, `get_outputs`, and `get_font`
-  (defaulting to `random`, `subprocess.run`, `sway_outputs`, and `system_font`)
-  so the full flow can be driven deterministically; `only` restricts the run to a
+  copy), the desktop queries and wallpaper setters `desktop.py` runs (`swaymsg`,
+  `gsettings`, `kscreen-doctor`, `kreadconfig6`, and `plasma_wallpaper_command` —
+  a Plasma desktop script sent over `gdbus`), and the `git` commands
+  `sync()`/`sync_pending()` run.
+- `artwall/desktop.py` — everything compositor-specific, behind one `Desktop`
+  NamedTuple: `outputs()` (each an `Output` carrying name + pixel size + HiDPI
+  scale), `font()` (file + point size) and `wallpaper(name, path)` (the argv that
+  sets one display's wallpaper). Two instances: `SWAY` (`swaymsg`, the GTK font
+  from `gsettings`) and `PLASMA` (`kscreen-doctor -j`, the font from
+  `kdeglobals`); `detect(environ)` picks one from `SWAYSOCK` /
+  `XDG_CURRENT_DESKTOP` and refuses anything else. Plasma addresses a desktop by
+  screen index, so its script resolves the connector with `screenForConnector()`.
+  **Plasma ignores a wallpaper URL it already shows** — rewriting
+  `current-<name>.jpg` in place and setting it again leaves the old painting on
+  screen — so `plasma_wallpaper()` appends the file's mtime as `?v=`, making every
+  render a new URL for the same file.
+- `artwall/app.py` — orchestration. `run(config, rng, runner, desktop, throttle,
+  only)` injects `rng`, `runner` and `desktop` (defaulting to `random`,
+  `subprocess.run` and `desktop.detect(os.environ)`) so the full flow can be driven deterministically; `only` restricts the run to a
   single named output (the overlay's refresh button → `--output`). `search_entities()`
   backs `--find`. In `"interactive"` mode it skips the caption burn, resolves the
   Wikipedia URL (`_wiki_url`), and writes `caption_file(name)` for the overlay.
@@ -337,9 +353,8 @@ that WDQS refresh fails (it's outage-prone), fall back to the stale cache — or
 bundle — rather than crashing; the stale mtime is left untouched so the next run
 retries and self-heals once WDQS recovers.
 `dump_catalogue()` / `make catalogue` regenerates the shipped seed) → query the
-active outputs (`get_outputs`, default `sway_outputs()` → `swaymsg -t
-get_outputs`; each is an `Output` carrying name + pixel size + HiDPI scale) and
-the system font (`get_font`, default `system_font()`) → for each display,
+active outputs (`desktop.outputs()`) and the system font (`desktop.font()`) →
+for each display,
 pick a random QID and fetch its image filename + title/date via the Action API
 (`wbgetentities`), then a second `wbgetentities` for the creator's name (retry up
 to `ATTEMPTS`, same as a QID that has since lost its image, to skip one whose
@@ -348,8 +363,9 @@ native resolution — a Commons `imageinfo` call — is smaller than the display
 enlarge, and blur, it; `wikidata.fits()` is the check), build and
 download a width-capped Commons thumbnail, `magick`-compose it onto an
 `Output`-sized gradient canvas (whole painting; caption burned in only in
-`"text"` mode) at `current-<output>.jpg`, `swaymsg output <name> bg … fill` (a
-1:1 blit, since the canvas is already the display's size); in `"interactive"` mode
+`"text"` mode) at `current-<output>.jpg`, set it with `desktop.wallpaper()` (on
+Sway `swaymsg output <name> bg … fill`, a 1:1 blit since the canvas is already
+the display's size); in `"interactive"` mode
 also write `caption-<output>.json` (text + Wikipedia URL) for the overlay → touch
 `config.stamp`. Selection is plain random — no persisted history — but QIDs
 already chosen this run are excluded so each display gets a *different* painting.
@@ -359,10 +375,11 @@ always burns the caption (a preview is one self-contained image), composes at a
 default 1920x1080, writes `preview.jpg`, opens it with `xdg-open`, and leaves the
 wallpaper untouched.
 
-`sway_outputs()` and `system_font()` are the functions excluded from coverage
-(`# pragma: no cover`) — they need a live Sway compositor / desktop; their pure
-parsing+math is split out and tested (`parse_outputs()`, and `parse_font_name()`
-+ `scaled_pointsize()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
+`desktop.py`'s live readers (`sway_outputs()`, `gtk_font()`, `plasma_outputs()`,
+`kde_font()`) are the functions excluded from coverage (`# pragma: no cover`) —
+they need a live compositor / desktop; their pure parsing+math is split out and
+tested (`parse_outputs()`, `parse_kscreen_outputs()`, `parse_font_name()`,
+`parse_kde_font()`, and `app.scaled_pointsize()`). `artwall/overlay.py` is excluded wholesale (`.coveragerc`
 omit) — it can't run headless. All state is cached under `~/.cache/artwall/`;
 deleting it is a safe reset. The one exception is the starred gallery under
 `~/.local/share/artwall/` (`stars.json` + `images/` + `stars.html` + `.trash/`) —
@@ -383,6 +400,12 @@ When testing anything that does IO, follow this pattern (local server +
 injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 ## Deployment notes
+
+On KDE Plasma the same two launchers run from `~/.config/autostart/*.desktop`
+entries instead (README has them): a `sh -c "while :; do …/bin/artwall
+--throttle; sleep 60; done"` loop, and `bin/artwall-overlay`. There is no
+hotplug trigger — a new screen waits for the next rotation. The rest of this
+section describes Sway.
 
 No installer and no systemd. The user adds `exec` lines to their Sway config: one
 to set a wallpaper at startup; one subscribing to window events that runs artwall
