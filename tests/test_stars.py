@@ -97,7 +97,8 @@ class RenderPage(unittest.TestCase):
     def test_images_are_relative_so_the_directory_is_portable(self):
         page = stars.render_page([star_of(101)])
         self.assertIn('<img src="images/Q101.jpg"', page)
-        self.assertNotIn("commons.wikimedia.org", page)  # nothing loads from the network
+        # nothing loads from the network
+        self.assertNotIn('src="https://commons.wikimedia.org', page)
 
     def test_the_image_links_to_the_full_size_file(self):
         page = stars.render_page([star_of(101)])
@@ -122,7 +123,7 @@ class RenderPage(unittest.TestCase):
     def test_unstar_buttons_only_when_interactive(self):
         self.assertNotIn("/unstar/", stars.render_page([star_of(101)]))
         served = stars.render_page([star_of(101)], interactive=True)
-        self.assertIn('<form class="corner" method="post" action="/unstar/Q101">', served)
+        self.assertIn('<form method="post" action="/unstar/Q101">', served)
 
     def test_the_unstar_button_is_labelled_for_screen_readers(self):
         served = stars.render_page([star_of(101, title="The Night Watch")], interactive=True)
@@ -131,6 +132,25 @@ class RenderPage(unittest.TestCase):
     def test_an_untitled_paintings_button_still_gets_a_label(self):
         served = stars.render_page([star_of(101, title="")], interactive=True)
         self.assertIn('aria-label="Unstar Untitled"', served)
+
+    def test_a_share_link_is_always_present_even_when_not_interactive(self):
+        # not a mutation, so it belongs on the archived stars.html too
+        page = stars.render_page([star_of(101)])
+        self.assertIn(
+            '<a href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
+            'target="_blank" rel="noopener noreferrer" '
+            'title="Open Painting 101 on Commons" aria-label="Open Painting 101 on Commons">'
+            "🌐</a>",
+            page,
+        )
+
+    def test_the_share_link_names_the_commons_file_not_the_articles_wikidata_url(self):
+        # `url` here is a Wikidata item link (see star_of's M-key variant below),
+        # which resolve_link()'s parse_file_link can't turn back into a painting
+        page = stars.render_page(
+            [star_of(202, image="Cats.jpg", url="https://www.wikidata.org/wiki/Q202")]
+        )
+        self.assertIn('href="https://commons.wikimedia.org/wiki/File:Cats.jpg"', page)
 
     def test_the_trash_link_appears_only_when_the_trash_has_something(self):
         stars_ = [star_of(101)]
@@ -419,6 +439,18 @@ class RenderPublic(unittest.TestCase):
         page = stars.render_public([star_of(101)])
         self.assertIn("Rembrandt", page)
         self.assertIn('href="https://en.wikipedia.org/wiki/Painting_101"', page)
+
+    def test_each_tile_has_a_share_link_to_add_it_to_another_gallery(self):
+        # a Commons File: link, not the article link above — the one
+        # resolve_link() can actually turn back into the same painting
+        page = stars.render_public([star_of(101)])
+        self.assertIn(
+            '<a href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
+            'target="_blank" rel="noopener noreferrer" '
+            'title="Open Painting 101 on Commons" aria-label="Open Painting 101 on Commons">'
+            "🌐</a>",
+            page,
+        )
 
     def test_it_is_headed_like_the_rest_of_the_gallery(self):
         self.assertIn("★ 1 starred painting<", stars.render_public([star_of(101)]))

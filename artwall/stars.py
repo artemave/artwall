@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from . import app, cache, commands, selection, web, wikidata
-from .config import PUBLIC_THUMB_DIR, STARS_IMAGE_DIR, Config
+from .config import COMMONS_FILE_URL, PUBLIC_THUMB_DIR, STARS_IMAGE_DIR, Config
 
 Star = dict[str, Any]
 # A trashed painting: the record, plus the index it held in the gallery.
@@ -199,17 +199,19 @@ figcaption time { color: var(--dim); }
 .empty { color: var(--dim); }
 .trashed img { opacity: .55; }
 
-/* The corner button: ★ to unstar in the gallery, ⤺ to restore in the trash.
-   Always visible, and 2.75rem square — a finger's worth, not a cursor's. */
-.corner { position: absolute; top: .5rem; right: .5rem; margin: 0; }
-.corner button {
+/* The corner buttons: ★ to unstar in the gallery, ⤺ to restore in the trash,
+   🌐 to open its Commons page, one to three grouped over a tile's top-right corner.
+   Always visible, and each 2.75rem square — a finger's worth, not a cursor's. */
+.corner { position: absolute; top: .5rem; right: .5rem; margin: 0; display: flex; gap: .4rem; }
+.corner form { margin: 0; }
+.corner button, .corner a {
   display: block; width: 2.75rem; height: 2.75rem; padding: 0;
   border: 0; border-radius: 50%; cursor: pointer;
   background: rgba(0,0,0,.45); color: #fff;
-  font-size: 1.1rem; line-height: 2.75rem;
+  font-size: 1.1rem; line-height: 2.75rem; text-align: center; text-decoration: none;
   transition: opacity .15s ease, background .15s ease;
 }
-.corner button:focus-visible { opacity: 1; background: rgba(0,0,0,.8); }
+.corner button:focus-visible, .corner a:focus-visible { opacity: 1; background: rgba(0,0,0,.8); }
 
 /* Hover-only polish, gated: a tap on a touchscreen leaves `:hover` stuck on the
    thing you tapped, so anything that *reveals* on hover would be revealed on one
@@ -221,9 +223,11 @@ figcaption time { color: var(--dim); }
   .art:hover img { box-shadow: 0 2px 6px rgba(0,0,0,.28), 0 14px 36px rgba(0,0,0,.2); }
   .title:hover { text-decoration: underline; }
   .trashed:hover img { opacity: 1; }
-  .corner button { width: 2rem; height: 2rem; font-size: .95rem; line-height: 2rem; opacity: .5; }
-  figure:hover .corner button { opacity: .85; }
-  .corner button:hover { opacity: 1; background: rgba(0,0,0,.8); }
+  .corner button, .corner a {
+    width: 2rem; height: 2rem; font-size: .95rem; line-height: 2rem; opacity: .5;
+  }
+  figure:hover .corner button, figure:hover .corner a { opacity: .85; }
+  .corner button:hover, .corner a:hover { opacity: 1; background: rgba(0,0,0,.8); }
   .flash button:hover, .add button:hover, .sync button:not(:disabled):hover {
     background: var(--fg); color: var(--bg); border-color: var(--fg);
   }
@@ -529,7 +533,7 @@ def _flash(flash: Flash) -> str:
     return f'<div class="flash"><span>{verb}{named}.</span>{undo}</div>'
 
 
-def _tile(star: Star, src: str, button: str, classes: str = "", link: str | None = None) -> str:
+def _tile(star: Star, src: str, corner: str, classes: str = "", link: str | None = None) -> str:
     """One painting. The image links to the full-size file it was archived as; the
     title links to its Wikipedia article, in a new tab so the gallery stays put.
 
@@ -548,7 +552,7 @@ def _tile(star: Star, src: str, button: str, classes: str = "", link: str | None
         f"<figcaption><b>{artist}</b>"
         f'<a class="title" href="{article}" target="_blank" rel="noopener noreferrer">'
         f"{title}</a> <time>{date}</time>"
-        f"</figcaption>{button}</figure>"
+        f"</figcaption>{corner}</figure>"
     )
 
 
@@ -569,11 +573,35 @@ def _label(star: Star) -> str:
     return html.escape(star["title"] or selection.UNTITLED)
 
 
-def _corner(action: str, glyph: str, label: str) -> str:
+def _action(action: str, glyph: str, label: str) -> str:
     return (
-        f'<form class="corner" method="post" action="{action}">'
+        f'<form method="post" action="{action}">'
         f'<button type="submit" title="{label}" aria-label="{label}">{glyph}</button></form>'
     )
+
+
+def _share_url(star: Star) -> str:
+    """The Commons file page for this painting — the link to hand another artwall
+    user so pasting it into their gallery adds the same painting.
+
+    `resolve_link()`'s `parse_file_link` only recognises a link that names a file
+    ("File:..."); the record's own `url` is often a Wikidata item page instead
+    (whatever the caption's "click for Wikipedia" needs), which doesn't resolve.
+    """
+    return wikidata.file_page_url(COMMONS_FILE_URL, wikidata.FILE_PREFIX + star["image"])
+
+
+def _share_link(star: Star, label: str) -> str:
+    href = html.escape(_share_url(star))
+    return (
+        f'<a href="{href}" target="_blank" rel="noopener noreferrer" '
+        f'title="{label}" aria-label="{label}">🌐</a>'
+    )
+
+
+def _corner(items: list[str]) -> str:
+    """Group a tile's 1-3 small round buttons/links over its top-right corner."""
+    return f'<div class="corner">{"".join(items)}</div>' if items else ""
 
 
 def _title(stars: list[Star], owner: str = "") -> str:
@@ -645,9 +673,16 @@ def render_page(
             _tile(
                 s,
                 f"{STARS_IMAGE_DIR}/{s['key']}.jpg",  # relative: keeps the dir portable
-                _corner(f"/unstar/{s['key']}", "★", f"Unstar {_label(s)}")
-                if interactive
-                else "",
+                _corner(
+                    [
+                        *(
+                            [_action(f"/unstar/{s['key']}", "★", f"Unstar {_label(s)}")]
+                            if interactive
+                            else []
+                        ),
+                        _share_link(s, f"Open {_label(s)} on Commons"),
+                    ]
+                ),
             )
             for s in reversed(stars)
         ]
@@ -696,7 +731,9 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
             _tile(
                 t["star"],
                 f"/trash/images/{t['star']['key']}.jpg",
-                _corner(f"/restore/{t['star']['key']}", "⤺", f"Restore {_label(t['star'])}"),
+                _corner(
+                    [_action(f"/restore/{t['star']['key']}", "⤺", f"Restore {_label(t['star'])}")]
+                ),
                 classes="trashed",
             )
             for t in reversed(trashed)
@@ -745,7 +782,7 @@ def render_public(stars: list[Star], owner: str = "") -> str:
                 _tile(
                     s,
                     f"{PUBLIC_THUMB_DIR}/{s['key']}.jpg",
-                    "",
+                    _corner([_share_link(s, f"Open {_label(s)} on Commons")]),
                     link=f"{STARS_IMAGE_DIR}/{s['key']}.jpg",
                 )
                 for s in reversed(stars)

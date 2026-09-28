@@ -190,6 +190,18 @@ it can be tested without network or `swaymsg`.
   trash is `restore()`d (`"restored"`) instead of re-downloaded: adding it afresh
   would leave the trash holding the same QID, and restoring *that* later would
   hang a second copy of the same painting.
+  **`_share_url(star)` is the paste box's counterpart** — every tile's 🌐 link, on
+  both `render_page()` and `render_public()`. It has to be the Commons file page
+  (`wikidata.file_page_url`, built from the record's own `image` filename), not
+  the record's `url`: `url` is often a Wikidata item link (whatever the caption's
+  "click for Wikipedia" needs), and `resolve_link()`'s `parse_file_link` only
+  recognises a link that names a file ("File:…") — a Wikidata item link pasted
+  into another artwall's gallery would fail to resolve. It's a plain `<a>`, not a
+  form: sharing isn't a mutation, so it needs no server behind it and shows up on
+  the archived `stars.html` and the published site the same as on the served
+  gallery. `_corner()` groups it with the star/restore button that shares its
+  tile's top-right corner, wrapping 1–3 icons behind one absolutely-positioned
+  `.corner` div rather than each button positioning itself.
   **Why a server:** the caption's ★ can only unstar the painting *currently* on a
   display, so the gallery must be able to remove an older one — and a `file://`
   page cannot delete a file. So the gallery renders over a loopback `http.server`
