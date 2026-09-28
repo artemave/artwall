@@ -53,8 +53,9 @@ Exec=/path/to/artwall/bin/artwall
   add any painting you come across.
 - **Publishing** — `~/.local/share/artwall/public/` is a static copy of the
   gallery, ready to upload anywhere. If `~/.local/share/artwall` is a git repo, a
-  **⇪ Sync** button commits and pushes it; [`template/`](template/) sets that up
-  to deploy to GitHub Pages.
+  **⇪ Sync** button commits and pushes it;
+  [artwall-gallery-template](https://github.com/artemave/artwall-gallery-template)
+  sets that up to deploy to GitHub Pages.
 
 Opt out of the gallery server or the published copy with `--no-serve-stars` /
 `--no-publish-stars`.

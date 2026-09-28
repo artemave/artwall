@@ -253,7 +253,8 @@ it can be tested without network or `swaymsg`.
   "nothing to commit" failing the whole thing), then an unconditional push — a
   no-op push still catches an earlier sync's commit that reached this far but
   not the remote. It relies on the repo already ignoring `.trash/` (shipped by
-  [`template/`](template/), the starting point for `data_dir` as a repo) rather
+  [artwall-gallery-template](https://github.com/artemave/artwall-gallery-template),
+  the starting point for `data_dir` as a repo) rather
   than filtering paths itself; nothing here would stop a `.trash/` that isn't
   gitignored from being pushed. A push failure comes back as `SyncError`
   (git's own stderr) and is shown as a `Flash`, same as a bad pasted link — a
@@ -420,10 +421,16 @@ through). There is no standalone gallery command, which is what makes "exactly o
 gallery" structural rather than enforced. The
 trash outlives it: only the gallery's "Delete forever" button removes a painting.
 
-[`template/`](template/) is not Python and ships nothing to `artwall/` — it's the
-starting point for `data_dir` as its own git repo, for someone who wants the ⇪ Sync
-button (`stars.is_git_repo()`/`stars.sync()`) without ever opening a terminal: its
+[artwall-gallery-template](https://github.com/artemave/artwall-gallery-template)
+is a separate GitHub repo — marked as a template repo, not a subdirectory of this
+one — and is not Python and ships nothing to `artwall/`. It's the starting point
+for `data_dir` as its own git repo, for someone who wants the ⇪ Sync button
+(`stars.is_git_repo()`/`stars.sync()`) without ever opening a terminal: its
 `.gitignore` keeps `.trash/` off the remote, and its GitHub Actions workflow
-deploys `public/` to GitHub Pages on every push `sync()` makes. Cloning it *is* the
-one-time setup; nothing in `artwall` itself creates the repo or configures a
-remote.
+deploys `public/` to GitHub Pages on every push `sync()` makes. Using GitHub's
+"Use this template" on it, then cloning the result to `~/.local/share/artwall`,
+*is* the one-time setup; nothing in `artwall` itself creates the repo or
+configures a remote. It's a separate repo (not a subdirectory here) because
+GitHub's template feature only works at the whole-repo level — a subdirectory
+can't be "used as a template" on its own, it would hand someone this entire
+project.
