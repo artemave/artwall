@@ -38,6 +38,9 @@ Name=artwall
 Exec=/path/to/artwall/bin/artwall
 ```
 
+Either way it starts at your next login — no need to log out now, just run
+`bin/artwall` by hand to see it working in the current session.
+
 ## Features
 
 - **Rotation** — a new painting at login, every 30 minutes (`min_interval`), and
@@ -55,7 +58,8 @@ Exec=/path/to/artwall/bin/artwall
   gallery, ready to upload anywhere. If `~/.local/share/artwall` is a git repo, a
   **⇪ Sync** button commits and pushes it;
   [artwall-gallery-template](https://github.com/artemave/artwall-gallery-template)
-  sets that up to deploy to GitHub Pages.
+  sets that up to deploy to GitHub Pages. **⇪ Sync** needs `git config --global
+  user.email`/`user.name` set — without them the commit, and so the push, fails.
 
 Opt out of the gallery server or the published copy with `--no-serve-stars` /
 `--no-publish-stars`.
