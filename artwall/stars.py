@@ -199,9 +199,9 @@ figcaption time { color: var(--dim); }
 .empty { color: var(--dim); }
 .trashed img { opacity: .55; }
 
-/* The corner buttons: ★ to unstar in the gallery, ⤺ to restore in the trash,
-   🌐 to open its Commons page, one to three grouped over a tile's top-right corner.
-   Always visible, and each 2.75rem square — a finger's worth, not a cursor's. */
+/* The corner buttons: 🗑️ to trash a painting in the gallery, ⤺ to restore it from
+   the trash, 🌐 to open its Commons page, one to three grouped over a tile's
+   top-right corner. Always visible, each 2.75rem square — a finger's worth. */
 .corner { position: absolute; top: .5rem; right: .5rem; margin: 0; display: flex; gap: .4rem; }
 .corner form { margin: 0; }
 .corner button, .corner a {
@@ -676,7 +676,7 @@ def render_page(
                 _corner(
                     [
                         *(
-                            [_action(f"/unstar/{s['key']}", "★", f"Unstar {_label(s)}")]
+                            [_action(f"/unstar/{s['key']}", "🗑️", f"Trash {_label(s)}")]
                             if interactive
                             else []
                         ),

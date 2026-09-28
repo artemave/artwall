@@ -127,11 +127,11 @@ class RenderPage(unittest.TestCase):
 
     def test_the_unstar_button_is_labelled_for_screen_readers(self):
         served = stars.render_page([star_of(101, title="The Night Watch")], interactive=True)
-        self.assertIn('aria-label="Unstar The Night Watch"', served)
+        self.assertIn('aria-label="Trash The Night Watch"', served)
 
     def test_an_untitled_paintings_button_still_gets_a_label(self):
         served = stars.render_page([star_of(101, title="")], interactive=True)
-        self.assertIn('aria-label="Unstar Untitled"', served)
+        self.assertIn('aria-label="Trash Untitled"', served)
 
     def test_a_share_link_is_always_present_even_when_not_interactive(self):
         # not a mutation, so it belongs on the archived stars.html too
