@@ -41,6 +41,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
+os.environ["GDK_BACKEND"] = "wayland"
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from gi.repository import GtkLayerShell as Layer  # type: ignore[attr-defined]  # noqa: E402
 
@@ -411,8 +412,22 @@ def main(serve_stars: bool, publish_stars: bool) -> None:
                 )
 
     rebuild()
-    display.connect("monitor-added", rebuild)
-    display.connect("monitor-removed", rebuild)
+    rebuild_source = 0
+
+    def schedule_rebuild(*_args: object) -> None:
+        nonlocal rebuild_source
+        if rebuild_source:
+            GLib.source_remove(rebuild_source)
+
+        def settled_rebuild() -> bool:
+            nonlocal rebuild_source
+            rebuild_source = 0
+            rebuild()
+            return False
+
+        rebuild_source = GLib.timeout_add(250, settled_rebuild)
+
+    screen.connect("monitors-changed", schedule_rebuild)
     display.connect(
         "monitor-added",
         lambda *_: artwall("--once", "--throttle", "--min-interval", HOTPLUG_MIN_INTERVAL),
@@ -441,4 +456,3 @@ def main(serve_stars: bool, publish_stars: bool) -> None:
     watch.connect("changed", on_change)
 
     Gtk.main()
-

@@ -326,7 +326,8 @@ it can be tested without network or `swaymsg`.
   session. It sets its process name to `artwall` (`prctl`, so `/proc/<pid>/comm`),
   because its command line is identical to its one-shot children's; that name is
   how `supersede_running_instances()` finds an older daemon to replace. It shows
-  a persistent GTK3 + gtk-layer-shell widget per display — one `BOTTOM`-layer clickable caption per display — each
+  a persistent GTK3 + gtk-layer-shell widget per display, with GTK's Wayland
+  backend selected explicitly — one `BOTTOM`-layer clickable caption per display — each
   followed by a ★ button (`--star <name>`), a gallery button (`xdg-open` on
   `gallery_url()`) and a refresh button that re-rolls that
   display (`--output <name>`) — matched to GTK monitors **by geometry** (GTK exposes the
@@ -419,8 +420,9 @@ injected `runner`/`rng`) rather than reaching for `unittest.mock`.
 
 No installer and no systemd. The user launches `bin/artwall` with the session:
 an `exec_always` line in the Sway config, or a `~/.config/autostart/*.desktop`
-entry on Plasma (README has both). The daemon does the rest — it rebuilds its surfaces on monitor hotplug via `Gdk.Display`
-`monitor-added`/`monitor-removed`, and runs every `python3 -m artwall …` child
+entry on Plasma (README has both). The daemon does the rest — it rebuilds its
+surfaces after `Gdk.Screen` `monitors-changed` events settle for 250 ms, covering
+hotplug and layout changes, and runs every `python3 -m artwall …` child
 (rotation, hotplug, refresh, star); the children inherit the launcher's
 `PYTHONPATH`, so a bare `python3 -m artwall` resolves the package. `bin/artwall`
 is a small shell launcher that sets `PYTHONPATH` to the repo and execs
