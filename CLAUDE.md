@@ -190,7 +190,7 @@ it can be tested without network or `swaymsg`.
   trash is `restore()`d (`"restored"`) instead of re-downloaded: adding it afresh
   would leave the trash holding the same QID, and restoring *that* later would
   hang a second copy of the same painting.
-  **`_share_url(star)` is the paste box's counterpart** — every tile's 🌐 link, on
+  **`_share_url(star)` is the paste box's counterpart** — every tile's 🔗 link, on
   both `render_page()` and `render_public()`. It has to be the Commons file page
   (`wikidata.file_page_url`, built from the record's own `image` filename), not
   the record's `url`: `url` is often a Wikidata item link (whatever the caption's
@@ -199,9 +199,12 @@ it can be tested without network or `swaymsg`.
   into another artwall's gallery would fail to resolve. It's a plain `<a>`, not a
   form: sharing isn't a mutation, so it needs no server behind it and shows up on
   the archived `stars.html` and the published site the same as on the served
-  gallery. `_corner()` groups it with the star/restore button that shares its
-  tile's top-right corner, wrapping 1–3 icons behind one absolutely-positioned
-  `.corner` div rather than each button positioning itself.
+  gallery. `_actions()` groups it with the trash/restore button in `.cap-top`,
+  the row `_tile()` puts beside the artist's name — not floating on the image, a
+  button over the art competes with it for attention on every tile of a page
+  that's nothing but tiles. `.share` is styled deliberately quieter than the
+  trash/restore button (no circle, smaller, lower opacity) so the two read as
+  primary and secondary actions rather than equals.
   **Why a server:** the caption's ★ can only unstar the painting *currently* on a
   display, so the gallery must be able to remove an older one — and a `file://`
   page cannot delete a file. So the gallery renders over a loopback `http.server`
@@ -244,15 +247,19 @@ it can be tested without network or `swaymsg`.
   so a static host answers the bare directory URL.
   **The shared `CSS` is mobile-first-ish and the hover rules are gated behind
   `@media (hover: hover)`**: a tap leaves `:hover` stuck on whatever was tapped, so
-  any hover-*reveal* (the corner button's opacity, the trash's dimming) would stay
-  revealed on one painting for the whole visit. That gate is also where the corner
-  button shrinks — it rests at 2.75rem (a finger) and only a pointer device gets the
-  2rem version. `-webkit-text-size-adjust: 100%` stops iOS inflating the caption of
-  every narrow tile past the heading's size.
+  an ungated hover effect (the trash button's or share link's background/opacity
+  change, `.trashed img`'s dimming) would stay applied to one painting for the
+  whole visit — this is why `.actions button:hover`/`.actions .share:hover` live
+  in that block rather than as plain `:hover` rules. Both icons are otherwise
+  fixed-size regardless of device: nothing here shrinks or resizes on hover any
+  more, since dropping the "floating over the art" placement (see `_tile()`) is
+  what used to need that. `-webkit-text-size-adjust: 100%` stops iOS inflating
+  the caption of every narrow tile past the heading's size.
   **The heading/flash buttons (★ Add, ⇪ Sync, Undo, Delete forever) are outlines,
   not filled blocks**, so the paintings stay the only solid thing on the page; they
   fill in only on hover, gated in the same `@media (hover: hover)` block as the
-  corner button, for the same reason. `--danger` is a `:root` token like `--bg`/
+  action buttons' hover feedback, for the same reason. `--danger` is a `:root`
+  token like `--bg`/
   `--fg`, with its own dark-mode value — the light-mode red is close to invisible
   on a near-black background, and reaching for a brighter one instead would make
   "Delete forever" the one loud thing on an otherwise quiet page.

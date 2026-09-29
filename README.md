@@ -54,7 +54,7 @@ Either way it starts at your next login — no need to log out now, just run
   can restore it or delete it for good.
 - **Add your own** — paste a Wikipedia or Commons image link into the gallery to
   add any painting you come across.
-- **Share** — every tile's 🌐 opens its Commons file page; copy that link into
+- **Share** — every tile's 🔗 opens its Commons file page; copy that link into
   someone else's gallery to add the same painting.
 - **Publishing** — `~/.local/share/artwall/public/` is a static copy of the
   gallery, ready to upload anywhere. If `~/.local/share/artwall` is a git repo, a

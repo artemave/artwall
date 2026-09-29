@@ -137,10 +137,10 @@ class RenderPage(unittest.TestCase):
         # not a mutation, so it belongs on the archived stars.html too
         page = stars.render_page([star_of(101)])
         self.assertIn(
-            '<a href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
+            '<a class="share" href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
             'target="_blank" rel="noopener noreferrer" '
-            'title="Open Painting 101 on Commons" aria-label="Open Painting 101 on Commons">'
-            "🌐</a>",
+            'title="Open Painting 101 in Commons" aria-label="Open Painting 101 in Commons">'
+            "🔗</a>",
             page,
         )
 
@@ -445,10 +445,10 @@ class RenderPublic(unittest.TestCase):
         # resolve_link() can actually turn back into the same painting
         page = stars.render_public([star_of(101)])
         self.assertIn(
-            '<a href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
+            '<a class="share" href="https://commons.wikimedia.org/wiki/File:Q101.jpg" '
             'target="_blank" rel="noopener noreferrer" '
-            'title="Open Painting 101 on Commons" aria-label="Open Painting 101 on Commons">'
-            "🌐</a>",
+            'title="Open Painting 101 in Commons" aria-label="Open Painting 101 in Commons">'
+            "🔗</a>",
             page,
         )
 

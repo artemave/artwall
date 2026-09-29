@@ -178,7 +178,6 @@ h1 .spacer { flex: 1; }
 figure {
   break-inside: avoid;          /* never split a painting across two columns */
   margin: 0 0 2.5rem;
-  position: relative;           /* anchors the corner button to the painting */
   /* deliberately block, not inline-block: an inline-block figure stops Chrome
      balancing across columns entirely and stacks every painting into the first. */
 }
@@ -192,42 +191,52 @@ img {
   transition: box-shadow .15s ease;
 }
 figcaption { margin-top: .85rem; font-size: .875rem; overflow-wrap: anywhere; }
-figcaption b { display: block; font-weight: 600; }
+/* Artist and its actions (trash/restore, share) share a row — not the image,
+   which stays free of anything floating on top of it on every tile of a page
+   that's nothing but tiles. `min-width: 0` lets the name itself keep wrapping
+   inside the flex item instead of pushing the actions out past the column. */
+.cap-top { display: flex; align-items: baseline; gap: .5rem; }
+.cap-top b { flex: 1; min-width: 0; font-weight: 600; }
 figcaption time { color: var(--dim); }
 .title { font-style: italic; color: inherit; text-decoration: none; }
 .title:focus-visible { text-decoration: underline; }
 .empty { color: var(--dim); }
 .trashed img { opacity: .55; }
 
-/* The corner buttons: 🗑️ to trash a painting in the gallery, ⤺ to restore it from
-   the trash, 🌐 to open its Commons page, one to three grouped over a tile's
-   top-right corner. Always visible, each 2.75rem square — a finger's worth. */
-.corner { position: absolute; top: .5rem; right: .5rem; margin: 0; display: flex; gap: .4rem; }
-.corner form { margin: 0; }
-.corner button, .corner a {
-  display: block; width: 2.75rem; height: 2.75rem; padding: 0;
-  border: 0; border-radius: 50%; cursor: pointer;
-  background: rgba(0,0,0,.45); color: #fff;
-  font-size: 1.1rem; line-height: 2.75rem; text-align: center; text-decoration: none;
-  transition: opacity .15s ease, background .15s ease;
+/* 🗑️ to trash a painting in the gallery, ⤺ to restore it from the trash, grouped
+   with the smaller, quieter 🔗 share link (below) in `.cap-top`, beside the name.
+   No button chrome on either — no longer floating over the art, they sit on the
+   page's own background, which a solid circle was only ever there to read against. */
+.actions { display: flex; align-items: center; gap: .35rem; flex: none; }
+.actions form { margin: 0; }
+.actions button, .actions a {
+  display: block; width: 1.6rem; height: 1.6rem; padding: 0;
+  border: 0; background: none; cursor: pointer;
+  font-size: .95rem; line-height: 1.6rem; text-align: center; text-decoration: none;
+  transition: opacity .15s ease;
 }
-.corner button:focus-visible, .corner a:focus-visible { opacity: 1; background: rgba(0,0,0,.8); }
+.actions button:focus-visible, .actions a:focus-visible {
+  opacity: 1; outline: 2px solid var(--fg); outline-offset: 1px;
+}
+
+/* The share link: lower opacity than trash/restore, so it reads as the
+   lighter-weight action of the two. */
+.actions .share {
+  width: 1.3rem; height: 1.3rem; font-size: .8rem; line-height: 1.3rem; opacity: .6;
+}
+.actions .share:focus-visible { opacity: 1; }
 
 /* Hover-only polish, gated: a tap on a touchscreen leaves `:hover` stuck on the
-   thing you tapped, so anything that *reveals* on hover would be revealed on one
-   painting and hidden on the rest for the whole visit. Outside this block those
-   states are simply the resting state, which is why the button is dimmed here
-   rather than brightened — a phone gets it at full strength. */
+   thing you tapped, so a hover effect left ungated would stay revealed on one
+   painting and hidden on the rest for the whole visit. */
 @media (hover: hover) {
   h1 a:hover { color: var(--fg); text-decoration: underline; }
   .art:hover img { box-shadow: 0 2px 6px rgba(0,0,0,.28), 0 14px 36px rgba(0,0,0,.2); }
   .title:hover { text-decoration: underline; }
   .trashed:hover img { opacity: 1; }
-  .corner button, .corner a {
-    width: 2rem; height: 2rem; font-size: .95rem; line-height: 2rem; opacity: .5;
-  }
-  figure:hover .corner button, figure:hover .corner a { opacity: .85; }
-  .corner button:hover, .corner a:hover { opacity: 1; background: rgba(0,0,0,.8); }
+  .actions button { opacity: .75; }
+  .actions button:hover { opacity: 1; }
+  .actions .share:hover { opacity: 1; }
   .flash button:hover, .add button:hover, .sync button:not(:disabled):hover {
     background: var(--fg); color: var(--bg); border-color: var(--fg);
   }
@@ -243,8 +252,7 @@ figcaption time { color: var(--dim); }
 }
 .flash form { margin: 0; }
 /* Quiet by default — an outline, not a filled block, so the paintings stay the
-   only solid thing on the page. Each fills in only on hover (below), the same
-   dim-until-touched treatment as the corner button. */
+   only solid thing on the page. Each fills in only on hover (below). */
 .flash button, .danger button, .add button, .sync button {
   border: 1px solid var(--line); border-radius: 2px; /* the images' own radius */
   padding: .3rem .8rem; cursor: pointer;
@@ -533,13 +541,18 @@ def _flash(flash: Flash) -> str:
     return f'<div class="flash"><span>{verb}{named}.</span>{undo}</div>'
 
 
-def _tile(star: Star, src: str, corner: str, classes: str = "", link: str | None = None) -> str:
+def _tile(star: Star, src: str, actions: str, classes: str = "", link: str | None = None) -> str:
     """One painting. The image links to the full-size file it was archived as; the
     title links to its Wikipedia article, in a new tab so the gallery stays put.
 
-    `link` splits those two apart for the published site, where the grid shows a
-    web-sized copy and only the click pulls the multi-megabyte scan. Everywhere
-    else the tile shows the same file it links to.
+    `actions` (trash/restore, share) sits in its own row beside the artist name,
+    not over the image — a tile is otherwise all painting, and a button floating
+    on the art competes with it for attention on every tile of a page that's
+    nothing but tiles.
+
+    `link` splits the image link from its `src` for the published site, where the
+    grid shows a web-sized copy and only the click pulls the multi-megabyte scan.
+    Everywhere else the tile shows the same file it links to.
     """
     artist = html.escape(star["artist"] or selection.UNKNOWN_ARTIST)
     title = html.escape(star["title"] or selection.UNTITLED)
@@ -549,10 +562,10 @@ def _tile(star: Star, src: str, corner: str, classes: str = "", link: str | None
         f'<figure class="{classes}">'
         f'<a class="art" href="{link or src}">'
         f'<img src="{src}" alt="{title}" loading="lazy"></a>'
-        f"<figcaption><b>{artist}</b>"
+        f'<figcaption><div class="cap-top"><b>{artist}</b>{actions}</div>'
         f'<a class="title" href="{article}" target="_blank" rel="noopener noreferrer">'
         f"{title}</a> <time>{date}</time>"
-        f"</figcaption>{corner}</figure>"
+        f"</figcaption></figure>"
     )
 
 
@@ -592,16 +605,20 @@ def _share_url(star: Star) -> str:
 
 
 def _share_link(star: Star, label: str) -> str:
+    """A quiet link — no button chrome, small and low-opacity — so it doesn't
+    outweigh the trash/restore button it sits beside, next to the artist's name
+    rather than a heavier action.
+    """
     href = html.escape(_share_url(star))
     return (
-        f'<a href="{href}" target="_blank" rel="noopener noreferrer" '
-        f'title="{label}" aria-label="{label}">🌐</a>'
+        f'<a class="share" href="{href}" target="_blank" rel="noopener noreferrer" '
+        f'title="{label}" aria-label="{label}">🔗</a>'
     )
 
 
-def _corner(items: list[str]) -> str:
-    """Group a tile's 1-3 small round buttons/links over its top-right corner."""
-    return f'<div class="corner">{"".join(items)}</div>' if items else ""
+def _actions(items: list[str]) -> str:
+    """Group a tile's 1-3 small buttons/links, shown beside the artist's name."""
+    return f'<div class="actions">{"".join(items)}</div>' if items else ""
 
 
 def _title(stars: list[Star], owner: str = "") -> str:
@@ -673,14 +690,14 @@ def render_page(
             _tile(
                 s,
                 f"{STARS_IMAGE_DIR}/{s['key']}.jpg",  # relative: keeps the dir portable
-                _corner(
+                _actions(
                     [
                         *(
                             [_action(f"/unstar/{s['key']}", "🗑️", f"Trash {_label(s)}")]
                             if interactive
                             else []
                         ),
-                        _share_link(s, f"Open {_label(s)} on Commons"),
+                        _share_link(s, f"Open {_label(s)} in Commons"),
                     ]
                 ),
             )
@@ -731,7 +748,7 @@ def render_trash(trashed: list[Trashed], flash: Flash | None = None) -> str:
             _tile(
                 t["star"],
                 f"/trash/images/{t['star']['key']}.jpg",
-                _corner(
+                _actions(
                     [_action(f"/restore/{t['star']['key']}", "⤺", f"Restore {_label(t['star'])}")]
                 ),
                 classes="trashed",
@@ -782,7 +799,7 @@ def render_public(stars: list[Star], owner: str = "") -> str:
                 _tile(
                     s,
                     f"{PUBLIC_THUMB_DIR}/{s['key']}.jpg",
-                    _corner([_share_link(s, f"Open {_label(s)} on Commons")]),
+                    _actions([_share_link(s, f"Open {_label(s)} in Commons")]),
                     link=f"{STARS_IMAGE_DIR}/{s['key']}.jpg",
                 )
                 for s in reversed(stars)
