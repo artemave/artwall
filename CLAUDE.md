@@ -21,10 +21,11 @@ file at `~/.config/artwall/config.toml` narrows it via a date window + QID filte
 (`movements`/`genres`/`artists`/`collections`) and sets
 `language`/`font_size`. Bare `artwall` is the **daemon**, launched with the
 session; everything else is a **oneshot** — `--once` sets the wallpaper once and
-exits. The daemon drives rotation: it runs `artwall --once --throttle` at
-startup and every minute (`--throttle` turns all but one run per
-`Config.min_interval` into a no-op), and `--once --throttle --min-interval 5` on
-monitor hotplug. Its children inherit the session's environment (`SWAYSOCK` on
+exits. The daemon drives rotation: it runs `artwall --once --throttle --restore`
+at startup, `artwall --once --throttle` every minute (`--throttle` turns all but
+one run per `Config.min_interval` into a no-op; `--restore` makes that no-op
+re-apply the current paintings instead, since a Sway reload clears them), and
+`--once --throttle --min-interval 5` on monitor hotplug. Its children inherit the session's environment (`SWAYSOCK` on
 Sway) — no systemd, no env import. The daemon draws the caption in GTK's UI
 font; `font_size` overrides the size. The **core oneshot has no third-party Python
 dependencies — keep it that way** (use `urllib`, not `requests`); external CLI
@@ -49,6 +50,7 @@ python3 -m artwall                       # the daemon: captions + rotation (need
 python3 -m artwall --once                # set the wallpaper once (hits network + swaymsg + magick)
 python3 -m artwall --once --throttle     # set once, but no-op if changed < Config.min_interval ago (the daemon's timer)
 python3 -m artwall --once --throttle --min-interval 5  # throttle with a 5s window (the daemon's hotplug re-roll)
+python3 -m artwall --once --throttle --restore  # if throttled, re-set the current paintings (the daemon's startup run)
 python3 -m artwall --find impressionism  # look up Wikidata QIDs for the config filters
 python3 -m artwall --output DP-1          # re-roll only one display (the caption's refresh button)
 python3 -m artwall --star DP-1            # star/unstar that display's painting (the caption's ★ button)
@@ -306,7 +308,7 @@ it can be tested without network or `swaymsg`.
   screen — so `plasma_wallpaper()` appends the file's mtime as `?v=`, making every
   render a new URL for the same file.
 - `artwall/app.py` — orchestration. `run(config, rng, runner, desktop, throttle,
-  only)` injects `rng`, `runner` and `desktop` (defaulting to `random`,
+  min_interval, only, restore)` injects `rng`, `runner` and `desktop` (defaulting to `random`,
   `subprocess.run` and `desktop.detect(os.environ)`) so the full flow can be driven deterministically; `only` restricts the run to a
   single named output (the caption's refresh button → `--output`). `search_entities()`
   backs `--find`. For each display it resolves the Wikipedia URL (`_wiki_url`)
@@ -335,8 +337,11 @@ it can be tested without network or `swaymsg`.
   on the cache dir whenever `run()` rewrites a `caption-<name>.json`. Every
   child goes through `artwall()`, which `Popen`s `python3 -m artwall …` and reaps
   it from a `GLib.timeout`.
-  **It drives rotation.** `main()` runs `artwall --once --throttle`
-  once at startup and every `ROTATION_CHECK_SECONDS` (60) after, and
+  **It drives rotation.** `main()` runs `artwall --once --throttle --restore`
+  once at startup — a Sway reload drops every `output … bg` and restarts the
+  daemon with it, so a throttled startup run must put the paintings back rather
+  than do nothing — then `artwall --once --throttle` every
+  `ROTATION_CHECK_SECONDS` (60), and
   `--once --throttle --min-interval 5` on `monitor-added` — a hotplug re-rolls every
   display, which is what gives the new screen a painting, and the short interval
   folds a dock's several monitors into one run. The throttle stays in tested
@@ -364,8 +369,12 @@ it can be tested without network or `swaymsg`.
   oneshot, omitted from coverage, but type-checked (GTK3 PyGObject-stubs, built
   via `PYGOBJECT_STUB_CONFIG=Gtk3,Gdk3` in `make install-dev`).
 
-Flow in `run()`: if `throttle` and `config.stamp` was touched more recently than
-`config.min_interval`, return early (the rotation throttle). Otherwise:
+Flow in `run()`: query the active outputs (`desktop.outputs()`). If `throttle`,
+every one of them already has a `current-<output>.jpg`, and `config.stamp` was
+touched more recently than `config.min_interval`, return early (the rotation
+throttle) — after re-setting those images with `desktop.wallpaper()` when
+`restore`. A display without an image yet overrides the throttle, so a screen
+plugged in just after a rotation isn't left blank. Otherwise:
 fetch/cache the catalogue (`painting_ids()`: a fresh per-filter-set cache wins;
 else on a true first run, seed from the shipped `bundled_ids_file()` if present —
 the default filters ship one, so no WDQS hit; else one SPARQL query → all matching
@@ -373,8 +382,8 @@ painting QIDs as a CSV of bare ints, cached under `painting-ids-<hash>.json`. If
 that WDQS refresh fails (it's outage-prone), fall back to the stale cache — or the
 bundle — rather than crashing; the stale mtime is left untouched so the next run
 retries and self-heals once WDQS recovers.
-`dump_catalogue()` / `make catalogue` regenerates the shipped seed) → query the
-active outputs (`desktop.outputs()`) → for each display,
+`dump_catalogue()` / `make catalogue` regenerates the shipped seed) → for each
+display,
 pick a random QID and fetch its image filename + title/date via the Action API
 (`wbgetentities`), then a second `wbgetentities` for the creator's name (retry up
 to `ATTEMPTS`, same as a QID that has since lost its image, to skip one whose

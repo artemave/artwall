@@ -326,6 +326,7 @@ def run(
     throttle: bool = False,
     min_interval: float | None = None,
     only: str | None = None,
+    restore: bool = False,
 ) -> list[int]:
     """Set a different random painting on each connected display, and write each
     one's caption record for the daemon.
@@ -335,7 +336,11 @@ def run(
     ask every minute without thrashing the wallpaper. A small `min_interval` suits
     a hotplug (coalesce several monitors into one run). `only` restricts the
     change to the single output of that name (the caption's refresh button
-    re-rolls just its own display).
+    re-rolls just its own display). A throttled run still goes ahead if a
+    display has never been given a painting. With `restore`, a throttled run
+    re-applies each display's current painting instead of doing nothing: a Sway
+    reload drops every `output … bg`, and the daemon (re)started by that reload
+    would otherwise leave the screens blank until the next rotation.
     `rng`, `runner` and `desktop` are injected so tests can drive run()
     deterministically — no mocks, no real compositor.
     """
@@ -350,17 +355,24 @@ def run(
         if not acquired:
             return []
 
-        interval = config.min_interval if min_interval is None else min_interval
-        if throttle and cache.fresh(config.stamp, interval):
-            return []
-
-        ids = painting_ids(config)
-
         displays = desktop.outputs()
         if only is not None:
             displays = [o for o in displays if o.name == only]
             if not displays:
                 raise RuntimeError(f"no active output named {only!r}")
+
+        interval = config.min_interval if min_interval is None else min_interval
+        painted = all(config.output_image(o.name).exists() for o in displays)
+        if throttle and painted and cache.fresh(config.stamp, interval):
+            if restore:
+                for output in displays:
+                    runner(
+                        desktop.wallpaper(output.name, config.output_image(output.name)),
+                        check=True,
+                    )
+            return []
+
+        ids = painting_ids(config)
 
         shown: list[int] = []
         for output in displays:

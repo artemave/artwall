@@ -42,6 +42,13 @@ def main(argv: list[str] | None = None) -> None:
         "rotation timer runs this every minute.",
     )
     parser.add_argument(
+        "--restore",
+        action="store_true",
+        help="With --throttle: when the change is skipped, set each display's current "
+        "painting again. artwall does this at startup, since a Sway reload clears "
+        "the wallpaper.",
+    )
+    parser.add_argument(
         "--min-interval",
         type=float,
         metavar="SECONDS",
@@ -80,6 +87,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--min-interval has no effect without --throttle")
     if args.throttle and not args.once:
         parser.error("--throttle has no effect without --once")
+    if args.restore and not args.throttle:
+        parser.error("--restore has no effect without --throttle")
 
     if args.find:
         for qid, label, description in search_entities(args.find):
@@ -90,7 +99,12 @@ def main(argv: list[str] | None = None) -> None:
         starred = stars.star(output=args.star)
         print("starred" if starred else "unstarred")
     elif args.once or args.output:
-        run(throttle=args.throttle, min_interval=args.min_interval, only=args.output)
+        run(
+            throttle=args.throttle,
+            min_interval=args.min_interval,
+            only=args.output,
+            restore=args.restore,
+        )
     else:
         # Imported here: it needs PyGObject + gtk-layer-shell, which no one-shot
         # action does.

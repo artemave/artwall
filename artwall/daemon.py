@@ -1,9 +1,10 @@
 """The daemon: what `artwall` runs with no action, launched once with the session.
 
-It rotates the wallpaper — a `--once --throttle` child at startup and every
-minute, and a re-roll on monitor hotplug — and shows each display's caption: a
-small GTK layer-shell widget with the painting as a clickable link (it opens the
-Wikipedia article), followed by three buttons: a star that adds the painting to
+It rotates the wallpaper — a `--once --throttle` child every minute (with
+`--restore` at startup, so a Sway reload doesn't leave the screens blank), and a
+re-roll on monitor hotplug — and shows each display's caption: a small GTK
+layer-shell widget with the painting as a clickable link (it opens the Wikipedia
+article), followed by three buttons: a star that adds the painting to
 the gallery, a gallery button that opens the whole collection, and a refresh that
 re-rolls the wallpaper on that one display. It reads the per-output caption files
 `run()` writes (`caption-<output>.json`) and updates whenever they change.
@@ -437,7 +438,7 @@ def main(serve_stars: bool, publish_stars: bool) -> None:
         artwall("--once", "--throttle")
         return True  # keep the timer
 
-    rotate()
+    artwall("--once", "--throttle", "--restore")
     GLib.timeout_add_seconds(ROTATION_CHECK_SECONDS, rotate)
 
     def on_change(

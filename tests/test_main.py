@@ -23,6 +23,15 @@ class ArgGuards(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
         self.assertIn("--throttle has no effect without --once", stderr.getvalue())
 
+    def test_restore_without_throttle_is_rejected(self):
+        # an unthrottled run always sets a fresh painting, so there's never
+        # anything to restore
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(stderr):
+            main(["--once", "--restore"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("--restore has no effect without --throttle", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

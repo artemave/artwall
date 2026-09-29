@@ -493,6 +493,7 @@ class ThrottleTests(unittest.TestCase):
 
     def test_skips_when_changed_recently(self):
         (self.cache_dir / "last_change").touch()  # a change just happened
+        (self.cache_dir / "current-DP-1.jpg").touch()
 
         router = wikidata_router([101, 102])
         with serve(router) as s:
@@ -508,6 +509,52 @@ class ThrottleTests(unittest.TestCase):
 
         self.assertEqual(shown, [])  # nothing chosen
         self.assertEqual(runner.calls, [])  # and nothing set
+
+    def test_restore_reapplies_the_current_paintings_instead_of_skipping(self):
+        # a Sway reload clears every output's bg; the daemon's startup run puts
+        # them back without re-rolling
+        (self.cache_dir / "last_change").touch()
+        for name in ("DP-1", "eDP-1"):
+            (self.cache_dir / f"current-{name}.jpg").touch()
+
+        with serve(wikidata_router([101, 102])) as s:
+            runner = Recorder()
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=runner,
+                desktop=fake_desktop("DP-1", "eDP-1"),
+                throttle=True,
+                restore=True,
+            )
+
+        self.assertEqual(shown, [])
+        self.assertEqual(
+            runner.calls,
+            [
+                (commands.wallpaper_command(name, self.cache_dir / f"current-{name}.jpg"), True)
+                for name in ("DP-1", "eDP-1")
+            ],
+        )
+
+    def test_a_display_without_a_painting_overrides_the_throttle(self):
+        # a monitor plugged in moments after a rotation must not stay blank until
+        # the next one
+        (self.cache_dir / "last_change").touch()
+        (self.cache_dir / "current-DP-1.jpg").touch()
+
+        router = wikidata_router([101, 102])
+        with serve(router) as s:
+            router.base = s.base_url
+            shown = app.run(
+                config=config_for(s, self.cache_dir),
+                rng=random.Random(0),
+                runner=Recorder(),
+                desktop=fake_desktop("DP-1", "HDMI-A-1"),
+                throttle=True,
+            )
+
+        self.assertEqual(len(shown), 2)
 
     def test_changes_when_interval_elapsed(self):
         stamp = self.cache_dir / "last_change"
