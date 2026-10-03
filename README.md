@@ -29,6 +29,8 @@ Clone the repo and start `bin/artwall` with your session. Nothing to install.
 exec_always /path/to/artwall/bin/artwall
 ```
 
+then `swaymsg reload`.
+
 **KDE Plasma** — `~/.config/autostart/artwall.desktop`:
 
 ```ini
@@ -38,14 +40,7 @@ Name=artwall
 Exec=/path/to/artwall/bin/artwall
 ```
 
-Either way it starts at your next login — no need to log out now, just run
-`bin/artwall` by hand to see it working in the current session.
-
-To restart it later (say, after a config change), just run it again — the new
-instance kills the old one automatically. On Sway,
-`swaymsg reload` does it (it re-runs every `exec_always` line, including this
-one). On KDE Plasma, open KRunner (Alt+Space) and run
-`/path/to/artwall/bin/artwall`.
+To start it now (or reload later), open KRunner (Alt+Space) and run `/path/to/artwall/bin/artwall`.
 
 ## Features
 
