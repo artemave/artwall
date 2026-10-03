@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only artwall/daemon.py needs these — the GTK bindings mypy type-checks it
+      # against (via PyGObject-stubs, built below) and gtk-layer-shell's typelib.
+      # Nothing else in the package touches a GUI toolkit.
+      - name: Install GTK introspection bindings
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 gir1.2-gtklayershell-0.1
+
+      # A venv, not the system interpreter: Ubuntu's system Python refuses a bare
+      # `pip install` (PEP 668). `--system-site-packages` still sees the
+      # apt-installed `gi` package, which both mypy and the stub build need.
+      # Put it on PATH for the rest of the job so `make install-dev`/`make check`
+      # — which both call bare `python3` — resolve to it.
+      - name: Create a venv with the system GTK bindings visible
+        run: |
+          python3 -m venv --system-site-packages .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - run: make install-dev
+      - run: make check
