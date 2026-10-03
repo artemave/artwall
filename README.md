@@ -115,5 +115,3 @@ is often rate-limited — if it fails, try again in a minute.
 make install-dev   # ruff, mypy, coverage, GTK stubs
 make check         # lint + typecheck + tests (100% coverage gate)
 ```
-
-See [`CLAUDE.md`](CLAUDE.md) for the architecture.
