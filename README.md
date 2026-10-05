@@ -6,8 +6,7 @@ with a clickable caption and a gallery of the ones you star.
 
 
 
-https://github.com/user-attachments/assets/2f3c4325-da6f-43f9-b121-dbcc80158574
-
+https://github.com/user-attachments/assets/f8058dfa-128b-43ee-8eeb-87317b60a216
 
 
 ## Install
